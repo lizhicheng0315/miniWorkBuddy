@@ -1,0 +1,49 @@
+{
+  "name": "workbuddy-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "本地智能助手：待办 / 日程 / 每日定时提醒 + LLM 总结建议",
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "build": "node scripts/build.js",
+    "build:win": "node scripts/build.js --target win-x64",
+    "gen-cert": "node scripts/gen-cert.js"
+  },
+  "bin": "server.js",
+  "pkg": {
+    "scripts": [
+      "server.js",
+      "src/**/*.js"
+    ],
+    "assets": [
+      "node_modules/sql.js/dist/sql-wasm.wasm",
+      "public/**/*",
+      "package.json"
+    ],
+    "targets": [
+      "node18-win-x64",
+      "node18-macos-x64",
+      "node18-macos-arm64",
+      "node18-linux-x64"
+    ],
+    "outputPath": "dist"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "^5.16.1"
+  },
+  "dependencies": {
+    "chrono-node": "^2.10.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "node-cron": "^3.0.3",
+    "node-notifier": "^10.0.1",
+    "openai": "^4.67.0",
+    "sql.js": "^1.10.3"
+  }
+}

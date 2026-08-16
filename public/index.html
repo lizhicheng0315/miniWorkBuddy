@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#38bdf8" />
+    <title>WorkBuddy 助手</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="stylesheet" href="styles.css?v=3" />
+  </head>
+  <body>
+    <!-- 登录遮罩 -->
+    <div id="loginOverlay" class="login-overlay">
+      <form id="loginForm" class="card login-card">
+        <h2>🧭 WorkBuddy</h2>
+        <p class="muted">请登录以使用你的本地助手</p>
+        <label>用户名 <input name="username" required autocomplete="username" /></label>
+        <label>密码 <input name="password" type="password" required autocomplete="current-password" /></label>
+        <div class="actions">
+          <button type="submit" class="primary">登录</button>
+        </div>
+        <p class="muted err" id="loginErr"></p>
+      </form>
+    </div>
+
+    <header class="topbar">
+      <div class="brand">🧭 <span>WorkBuddy</span> 助手</div>
+      <nav class="tabs">
+        <button class="tab active" data-tab="todos">待办</button>
+        <button class="tab" data-tab="schedule">日程</button>
+        <button class="tab" data-tab="reminders">提醒</button>
+        <button class="tab" data-tab="chat">对话</button>
+        <button class="tab" data-tab="ai">智能助手</button>
+      </nav>
+      <div class="status">
+        <span id="userInfo">—</span>
+        <span id="llmStatus">LLM: 检测中…</span>
+        <button id="btnLogout" class="small">登出</button>
+      </div>
+    </header>
+
+    <main>
+      <!-- 待办 -->
+      <section class="panel active" id="panel-todos">
+        <div class="row">
+          <h2>待办清单</h2>
+          <button class="primary" id="btnTodoNew">+ 新建</button>
+        </div>
+        <form id="todoForm" class="card form hidden">
+          <div class="grid">
+            <label>标题 <input name="title" required placeholder="如：写周报" /></label>
+            <label>优先级
+              <select name="priority">
+                <option value="1">🔴 高</option>
+                <option value="2" selected>🟡 中</option>
+                <option value="3">🔵 低</option>
+              </select>
+            </label>
+            <label>分类 <input name="category" placeholder="工作 / 生活…" /></label>
+            <label>截止时间 <input name="due_at" type="datetime-local" /></label>
+          </div>
+          <label>备注 <textarea name="notes" rows="2"></textarea></label>
+          <div class="actions">
+            <button type="submit" class="primary">保存</button>
+            <button type="button" id="todoCancel">取消</button>
+          </div>
+        </form>
+        <div class="card filter-bar">
+          <span class="muted">筛选：</span>
+          <button class="filter-chip active" data-filter="all">全部 <span class="count" id="cntAll">0</span></button>
+          <button class="filter-chip" data-filter="open">未完成 <span class="count" id="cntOpen">0</span></button>
+          <button class="filter-chip" data-filter="p1">🔴 高 <span class="count" id="cntP1">0</span></button>
+          <button class="filter-chip" data-filter="p2">🟡 中 <span class="count" id="cntP2">0</span></button>
+          <button class="filter-chip" data-filter="p3">🔵 低 <span class="count" id="cntP3">0</span></button>
+          <button class="filter-chip" data-filter="done">✅ 已完成 <span class="count" id="cntDone">0</span></button>
+          <span class="muted right">排序：</span>
+          <select id="todoSort">
+            <option value="priority">优先级</option>
+            <option value="due">截止时间</option>
+            <option value="created">创建时间</option>
+          </select>
+        </div>
+        <div id="todoList" class="list"></div>
+      </section>
+
+      <!-- 日程 -->
+      <section class="panel" id="panel-schedule">
+        <div class="row">
+          <h2>日程</h2>
+          <button class="primary" id="btnEventNew">+ 新建</button>
+        </div>
+        <form id="eventForm" class="card form hidden">
+          <div class="grid">
+            <label>标题 <input name="title" required /></label>
+            <label>开始 <input name="start_at" type="datetime-local" required /></label>
+            <label>结束 <input name="end_at" type="datetime-local" /></label>
+            <label>地点 <input name="location" /></label>
+            <label>提前提醒(分钟) <input name="remind_before_min" type="number" min="0" value="15" /></label>
+          </div>
+          <label>备注 <textarea name="notes" rows="2"></textarea></label>
+          <div class="actions">
+            <button type="submit" class="primary">保存</button>
+            <button type="button" id="eventCancel">取消</button>
+          </div>
+        </form>
+
+        <!-- 视图切换 -->
+        <div class="card view-tabs">
+          <button class="view-tab active" data-view="month">📅 月历</button>
+          <button class="view-tab" data-view="agenda">📋 列表</button>
+        </div>
+
+        <!-- 月历视图 -->
+        <div id="calendarView" class="card calendar">
+          <div class="cal-header">
+            <button id="calPrev" class="small">‹ 上月</button>
+            <h3 id="calTitle">—</h3>
+            <button id="calNext" class="small">下月 ›</button>
+            <button id="calToday" class="small primary">今天</button>
+          </div>
+          <div class="cal-weekdays">
+            <div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div class="weekend">六</div><div class="weekend">日</div>
+          </div>
+          <div id="calGrid" class="cal-grid"></div>
+        </div>
+
+        <!-- 选中日期的事件详情 -->
+        <div id="dayDetail" class="card hidden">
+          <div class="row">
+            <h3 id="dayDetailTitle">—</h3>
+            <button id="dayDetailClose" class="small">关闭</button>
+          </div>
+          <div id="dayDetailList"></div>
+        </div>
+
+        <!-- 列表视图（保留） -->
+        <div id="eventList" class="list hidden"></div>
+      </section>
+
+      <!-- 提醒 -->
+      <section class="panel" id="panel-reminders">
+        <div class="row">
+          <h2>每日定时提醒</h2>
+          <button class="primary" id="btnRemNew">+ 新建</button>
+        </div>
+        <form id="remForm" class="card form hidden">
+          <div class="grid">
+            <label>名称 <input name="title" required placeholder="如：喝水/写日报" /></label>
+            <label>Cron 表达式 <input name="cron" required placeholder="0 9 * * *  每天 9:00" /></label>
+          </div>
+          <label>提醒内容 <input name="message" placeholder="可选，弹窗会显示" /></label>
+          <small class="hint">格式：分 时 日 月 周。例：<code>0 9 * * *</code>（每天 9 点）、<code>*/30 9-18 * * 1-5</code>（工作日 9-18 点每 30 分钟）</small>
+          <div class="actions">
+            <button type="submit" class="primary">保存</button>
+            <button type="button" id="remCancel">取消</button>
+          </div>
+        </form>
+        <div id="remList" class="list"></div>
+      </section>
+
+      <!-- 对话 -->
+      <section class="panel" id="panel-chat">
+        <div class="row">
+          <h2>💬 与助手对话</h2>
+          <span class="muted" id="chatStatus">—</span>
+        </div>
+        <div class="card chat-window" id="chatWindow">
+          <div class="chat-empty muted" id="chatEmpty">
+            试试说：
+            <ul>
+              <li>「明天下午3点开会」</li>
+              <li>「提醒我买牛奶」</li>
+              <li>「每天9点提醒我写日报」</li>
+              <li>「我今天还有什么没做」</li>
+              <li>「生成今日日报」</li>
+              <li>「把买牛奶标记完成」</li>
+            </ul>
+          </div>
+        </div>
+        <div class="card chat-input">
+          <textarea id="chatInput" rows="2" placeholder="说点什么...（Shift+Enter 换行，Enter 发送）"></textarea>
+          <div class="actions">
+            <button class="primary" id="btnChatSend">发送</button>
+            <button id="btnChatStop" class="hidden">⏹ 停止</button>
+            <span class="muted" id="chatHint">回车发送 · Shift+回车换行</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 智能助手 -->
+      <section class="panel" id="panel-ai">
+        <div class="row">
+          <h2>智能助手</h2>
+          <span class="muted" id="aiStatus">—</span>
+        </div>
+        <div class="card quick-chat">
+          <div class="row" style="margin-bottom: 6px;">
+            <strong>💬 快速对话</strong>
+            <a class="muted" href="#" id="openFullChat">展开完整对话 →</a>
+          </div>
+          <div id="quickChatLog" class="chat-log-mini"></div>
+          <div style="display:flex; gap:8px; margin-top:8px;">
+            <input id="quickChatInput" placeholder="例如：明天下午3点开会" style="flex:1;" />
+            <button class="primary" id="btnQuickChat">发送</button>
+          </div>
+        </div>
+        <div class="card">
+          <p>把今天的待办、日程、提醒交给 LLM 帮你梳理。</p>
+          <div class="actions">
+            <button class="primary" id="btnSummarize">📋 今日摘要</button>
+            <button id="btnReport">📝 今日日报</button>
+            <button id="btnWeekly">📊 本周周报</button>
+            <button id="btnMonthly">🗓 月度复盘</button>
+          </div>
+        </div>
+        <div class="card">
+          <label>让 LLM 帮我拆解任务：</label>
+          <textarea id="breakdownText" rows="3" placeholder="例如：一周内完成毕业论文初稿"></textarea>
+          <div class="actions">
+            <button class="primary" id="btnBreakdown">🧩 拆解任务</button>
+          </div>
+          <pre id="breakdownOutput" class="hidden ai-json"></pre>
+        </div>
+        <div class="card">
+          <label>让 LLM 帮我想想：</label>
+          <textarea id="adviseText" rows="3" placeholder="例如：如何在一周内完成毕业论文初稿？"></textarea>
+          <div class="actions">
+            <button class="primary" id="btnAdvise">💡 给建议</button>
+          </div>
+        </div>
+        <div class="card">
+          <label>备份与恢复：</label>
+          <div class="actions">
+            <button id="btnExport">⬇️ 导出全部数据</button>
+            <label class="file-btn">
+              <input type="file" id="importFile" accept="application/json" hidden />
+              <span>📂 选择文件导入</span>
+            </label>
+            <select id="importMode">
+              <option value="replace">覆盖</option>
+              <option value="merge">合并</option>
+            </select>
+            <button class="primary" id="btnImport">确认导入</button>
+          </div>
+          <small class="hint" id="backupStats">—</small>
+        </div>
+        <div class="card output hidden" id="aiOutput">
+          <div class="output-header">
+            <span class="muted" id="aiOutputStatus"></span>
+            <button id="btnStop" class="small hidden">⏹ 停止</button>
+          </div>
+          <pre id="aiOutputText"></pre>
+        </div>
+
+        <!-- LLM 配置（admin only） -->
+        <div class="card" id="llmConfigCard">
+          <div class="row">
+            <h3>⚙️ LLM 配置</h3>
+            <span class="muted" id="llmConfigBadge">—</span>
+          </div>
+          <div id="llmConfigForm" class="hidden">
+            <div class="grid">
+              <label>Base URL
+                <input id="cfgBaseURL" placeholder="https://api.deepseek.com/v1" />
+              </label>
+              <label>模型
+                <input id="cfgModel" placeholder="deepseek-chat" />
+              </label>
+              <label>API Key
+                <input id="cfgApiKey" type="password" placeholder="留空保持不变" />
+              </label>
+            </div>
+            <div class="actions">
+              <button class="primary" id="btnCfgSave">保存</button>
+              <button id="btnCfgTest">🔌 测试连接</button>
+              <span class="muted" id="cfgStatus"></span>
+            </div>
+          </div>
+          <div id="llmConfigReadonly" class="muted">—</div>
+        </div>
+      </section>
+    </main>
+
+    <script defer src="app.js?v=6"></script>
+    <link rel="stylesheet" href="styles.css?v=3" />
+    <script>
+      // ?nosw=1 临时禁用 Service Worker（用于诊断缓存问题）
+      if (!location.search.includes('nosw=1') && 'serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('SW reg failed', e));
+        });
+      } else if (location.search.includes('nosw=1') && navigator.serviceWorker) {
+        // 顺手清掉旧 SW
+        navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
+        navigator.serviceWorker.getRegistrations().then(regs => {
+          // 清理 v1 缓存
+          if (caches) caches.keys().then(keys => keys.forEach(k => { if (k.startsWith('workbuddy')) caches.delete(k); }));
+        });
+        console.log('[diagnostic] SW disabled, old SW unregistered, cache cleared');
+      }
+    </script>
+    <!-- PWA 安装提示 -->
+    <div id="installBanner" class="install-banner hidden">
+      <span>📲 把 WorkBuddy 安装到桌面</span>
+      <button id="btnInstall" class="primary">安装</button>
+      <button id="btnInstallDismiss" class="small">稍后</button>
+    </div>
+  </body>
+</html>

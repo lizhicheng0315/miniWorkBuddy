@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>LLM 配置诊断</title>
+<style>
+  body { font-family: monospace; max-width: 800px; margin: 20px auto; padding: 0 20px; background: #1e293b; color: #e2e8f0; }
+  h1 { color: #38bdf8; }
+  button { padding: 8px 16px; background: #0ea5e9; color: white; border: 0; border-radius: 6px; cursor: pointer; margin: 4px; }
+  button:hover { background: #0284c7; }
+  input { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; padding: 8px; width: 100%; box-sizing: border-box; margin: 4px 0; border-radius: 4px; }
+  pre { background: #0f172a; padding: 12px; border-radius: 6px; overflow-x: auto; }
+  .row { margin: 12px 0; }
+  .ok { color: #4ade80; }
+  .err { color: #f87171; }
+  hr { border-color: #334155; }
+</style>
+</head>
+<body>
+<h1>🔧 LLM 配置诊断页面</h1>
+<p>本页面 <strong>不使用 Service Worker</strong>，不读取主站缓存。如果这里能用而主站不行 → 100% 是主站 app.js 缓存或事件绑定问题。</p>
+
+<hr/>
+
+<div class="row">
+  <h3>第 1 步：登录</h3>
+  <input id="u" value="admin" placeholder="用户名" />
+  <input id="p" type="password" placeholder="密码" />
+  <button onclick="login()">登录</button>
+  <pre id="login-out">—</pre>
+</div>
+
+<hr/>
+
+<div class="row">
+  <h3>第 2 步：读配置</h3>
+  <button onclick="getCfg()">GET /api/ai/config</button>
+  <pre id="get-out">—</pre>
+</div>
+
+<hr/>
+
+<div class="row">
+  <h3>第 3 步：写配置（直接 PATCH）</h3>
+  <input id="url" placeholder="Base URL" value="https://api.deepseek.com/v1" />
+  <input id="model" placeholder="Model" value="deepseek-chat" />
+  <input id="key" type="password" placeholder="API Key（留空保持不变）" />
+  <button onclick="patchCfg()">PATCH /api/ai/config</button>
+  <pre id="patch-out">—</pre>
+</div>
+
+<hr/>
+
+<div class="row">
+  <h3>第 4 步：测试连接</h3>
+  <button onclick="testCfg()">POST /api/ai/config/test</button>
+  <pre id="test-out">—</pre>
+</div>
+
+<script>
+let token = '';
+
+async function call(method, p, body) {
+  const h = { 'Content-Type': 'application/json' };
+  if (token) h.Authorization = 'Bearer ' + token;
+  const r = await fetch(p, { method, headers: h, body: body ? JSON.stringify(body) : undefined });
+  const t = await r.text();
+  try { return { status: r.status, json: JSON.parse(t), raw: t }; }
+  catch { return { status: r.status, raw: t }; }
+}
+
+function show(el, obj) {
+  document.getElementById(el).textContent = JSON.stringify(obj, null, 2);
+}
+
+async function login() {
+  const r = await call('POST', '/api/auth/login', { username: document.getElementById('u').value, password: document.getElementById('p').value });
+  show('login-out', r);
+  if (r.json && r.json.token) token = r.json.token;
+}
+
+async function getCfg() {
+  const r = await call('GET', '/api/ai/config');
+  show('get-out', r);
+  if (r.json) {
+    document.getElementById('url').value = r.json.baseURL || '';
+    document.getElementById('model').value = r.json.model || '';
+  }
+}
+
+async function patchCfg() {
+  const body = {};
+  const url = document.getElementById('url').value.trim();
+  const model = document.getElementById('model').value.trim();
+  const key = document.getElementById('key').value;
+  if (url) body.baseURL = url;
+  if (model) body.model = model;
+  if (key) body.apiKey = key;
+  const r = await call('PATCH', '/api/ai/config', body);
+  show('patch-out', r);
+  document.getElementById('key').value = '';
+}
+
+async function testCfg() {
+  const r = await call('POST', '/api/ai/config/test', {});
+  show('test-out', r);
+}
+</script>
+</body>
+</html>
