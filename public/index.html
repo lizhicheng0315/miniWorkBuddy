@@ -3,11 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#38bdf8" />
+    <meta name="theme-color" content="#2563eb" />
     <title>WorkBuddy 助手</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-    <link rel="stylesheet" href="styles.css?v=3" />
+    <link rel="stylesheet" href="styles.css?v=7" />
   </head>
   <body>
     <!-- 登录遮罩 -->
@@ -25,13 +25,13 @@
     </div>
 
     <header class="topbar">
-      <div class="brand">🧭 <span>WorkBuddy</span> 助手</div>
+      <div class="brand"><span class="brand-ico">🧭</span> WorkBuddy</div>
       <nav class="tabs">
-        <button class="tab active" data-tab="todos">待办</button>
+        <button class="tab active" data-tab="chat">对话</button>
+        <button class="tab" data-tab="todos">待办</button>
         <button class="tab" data-tab="schedule">日程</button>
         <button class="tab" data-tab="reminders">提醒</button>
-        <button class="tab" data-tab="chat">对话</button>
-        <button class="tab" data-tab="ai">智能助手</button>
+        <button class="tab" data-tab="ai">LLM配置</button>
       </nav>
       <div class="status">
         <span id="userInfo">—</span>
@@ -42,11 +42,25 @@
 
     <main>
       <!-- 待办 -->
-      <section class="panel active" id="panel-todos">
+      <section class="panel" id="panel-todos">
         <div class="row">
           <h2>待办清单</h2>
           <button class="primary" id="btnTodoNew">+ 新建</button>
         </div>
+
+        <!-- 快速添加（始终可见） -->
+        <form id="quickTodoForm" class="quick-add" autocomplete="off">
+          <span class="qa-icon">+</span>
+          <input id="quickTodoInput" placeholder="添加待办（例：写周报 #工作 · 选右侧优先级）" />
+          <select id="quickTodoPriority" title="优先级">
+            <option value="2">🟡 中</option>
+            <option value="1">🔴 高</option>
+            <option value="3">🔵 低</option>
+          </select>
+          <button type="submit" class="primary small">添加</button>
+          <div id="quickTodoHint" class="qa-hint"></div>
+        </form>
+
         <form id="todoForm" class="card form hidden">
           <div class="grid">
             <label>标题 <input name="title" required placeholder="如：写周报" /></label>
@@ -159,78 +173,102 @@
         <div id="remList" class="list"></div>
       </section>
 
-      <!-- 对话 -->
-      <section class="panel" id="panel-chat">
-        <div class="row">
-          <h2>💬 与助手对话</h2>
-          <span class="muted" id="chatStatus">—</span>
-        </div>
-        <div class="card chat-window" id="chatWindow">
-          <div class="chat-empty muted" id="chatEmpty">
-            试试说：
-            <ul>
-              <li>「明天下午3点开会」</li>
-              <li>「提醒我买牛奶」</li>
-              <li>「每天9点提醒我写日报」</li>
-              <li>「我今天还有什么没做」</li>
-              <li>「生成今日日报」</li>
-              <li>「把买牛奶标记完成」</li>
-            </ul>
+      <!-- 对话（核心界面） -->
+      <section class="panel active" id="panel-chat">
+        <div class="chat-shell">
+          <div class="chat-head">
+            <div class="chat-avatar">🤖</div>
+            <div class="chat-head-info">
+              <div class="chat-title">WorkBuddy 智能助手</div>
+              <div class="chat-sub" id="chatStatus">随时为你服务</div>
+            </div>
+            <div class="chat-head-actions">
+              <button id="btnWebSearchToggle" class="ghost small toggle-btn" title="联网搜索开关">
+                <span class="toggle-dot"></span> 联网
+              </button>
+              <button id="btnChatClear" class="ghost small" title="清空对话">清空</button>
+              <button id="btnChatStop" class="ghost small hidden" title="停止生成">⏹ 停止</button>
+            </div>
           </div>
-        </div>
-        <div class="card chat-input">
-          <textarea id="chatInput" rows="2" placeholder="说点什么...（Shift+Enter 换行，Enter 发送）"></textarea>
-          <div class="actions">
-            <button class="primary" id="btnChatSend">发送</button>
-            <button id="btnChatStop" class="hidden">⏹ 停止</button>
-            <span class="muted" id="chatHint">回车发送 · Shift+回车换行</span>
+          <div class="chat-window" id="chatWindow">
+            <div class="chat-empty" id="chatEmpty">
+              <div class="chat-empty-ico">💬</div>
+              <div class="chat-empty-title">你好，我是 WorkBuddy 助手</div>
+              <div class="chat-empty-sub">用自然语言管理待办、日程和提醒，试试这样说：</div>
+              <div class="chat-empty-chips">
+                <button class="chip" data-sample="明天下午3点开项目周会">📅 明天下午3点开会</button>
+                <button class="chip" data-sample="提醒我买牛奶">✅ 提醒我买牛奶</button>
+                <button class="chip" data-sample="每天9点提醒我写日报">⏰ 每天9点写日报</button>
+                <button class="chip" data-sample="我今天还有什么没做">📋 我今天还有什么没做</button>
+                <button class="chip" data-sample="生成今日日报">📝 生成今日日报</button>
+                <button class="chip" data-sample="把买牛奶标记完成">✔️ 把买牛奶标记完成</button>
+              </div>
+            </div>
+          </div>
+          <div class="chat-input">
+            <div class="chat-input-wrap">
+              <textarea id="chatInput" rows="1" placeholder="输入消息，Enter 发送…"></textarea>
+              <button class="primary send" id="btnChatSend" title="发送">发送 ↑</button>
+            </div>
+            <div class="chat-input-hint" id="chatHint">Enter 发送 · Shift+Enter 换行</div>
           </div>
         </div>
       </section>
 
-      <!-- 智能助手 -->
+      <!-- LLM 配置 -->
       <section class="panel" id="panel-ai">
         <div class="row">
-          <h2>智能助手</h2>
+          <h2>⚙️ LLM 配置</h2>
           <span class="muted" id="aiStatus">—</span>
         </div>
-        <div class="card quick-chat">
-          <div class="row" style="margin-bottom: 6px;">
-            <strong>💬 快速对话</strong>
-            <a class="muted" href="#" id="openFullChat">展开完整对话 →</a>
+
+        <!-- LLM 配置（admin only） -->
+        <div class="card" id="llmConfigCard">
+          <div class="row">
+            <h3>连接设置</h3>
+            <span class="muted" id="llmConfigBadge">—</span>
           </div>
-          <div id="quickChatLog" class="chat-log-mini"></div>
-          <div style="display:flex; gap:8px; margin-top:8px;">
-            <input id="quickChatInput" placeholder="例如：明天下午3点开会" style="flex:1;" />
-            <button class="primary" id="btnQuickChat">发送</button>
+          <div id="llmConfigForm" class="form">
+            <div class="grid">
+              <label>Base URL
+                <input id="cfgBaseURL" placeholder="https://api.deepseek.com/v1" />
+              </label>
+              <label>模型
+                <input id="cfgModel" placeholder="deepseek-chat" />
+              </label>
+              <label>API Key
+                <input id="cfgApiKey" type="password" placeholder="留空保持不变" autocomplete="off" />
+              </label>
+            </div>
+            <div class="actions">
+              <button class="primary" id="btnCfgSave">保存</button>
+              <button id="btnCfgTest">🔌 测试连接</button>
+              <span class="muted" id="cfgStatus"></span>
+            </div>
           </div>
+          <div id="llmConfigReadonly" class="muted">—</div>
         </div>
-        <div class="card">
-          <p>把今天的待办、日程、提醒交给 LLM 帮你梳理。</p>
-          <div class="actions">
-            <button class="primary" id="btnSummarize">📋 今日摘要</button>
-            <button id="btnReport">📝 今日日报</button>
-            <button id="btnWeekly">📊 本周周报</button>
-            <button id="btnMonthly">🗓 月度复盘</button>
+
+        <!-- Token 用量统计 -->
+        <div class="card" id="usageCard">
+          <div class="row">
+            <h3>📊 Token 用量</h3>
+            <div class="usage-range">
+              <button class="usage-range-btn active" data-days="7">7天</button>
+              <button class="usage-range-btn" data-days="30">30天</button>
+              <button class="usage-range-btn" data-days="90">90天</button>
+            </div>
           </div>
-        </div>
-        <div class="card">
-          <label>让 LLM 帮我拆解任务：</label>
-          <textarea id="breakdownText" rows="3" placeholder="例如：一周内完成毕业论文初稿"></textarea>
-          <div class="actions">
-            <button class="primary" id="btnBreakdown">🧩 拆解任务</button>
+          <div id="usageSummary" class="usage-summary">
+            <span class="muted">暂无用量数据</span>
           </div>
-          <pre id="breakdownOutput" class="hidden ai-json"></pre>
+          <div id="usageByModel"></div>
+          <div id="usageChart" class="usage-chart"></div>
         </div>
+
+        <!-- 备份与恢复 -->
         <div class="card">
-          <label>让 LLM 帮我想想：</label>
-          <textarea id="adviseText" rows="3" placeholder="例如：如何在一周内完成毕业论文初稿？"></textarea>
-          <div class="actions">
-            <button class="primary" id="btnAdvise">💡 给建议</button>
-          </div>
-        </div>
-        <div class="card">
-          <label>备份与恢复：</label>
+          <h3>数据备份</h3>
           <div class="actions">
             <button id="btnExport">⬇️ 导出全部数据</button>
             <label class="file-btn">
@@ -245,44 +283,10 @@
           </div>
           <small class="hint" id="backupStats">—</small>
         </div>
-        <div class="card output hidden" id="aiOutput">
-          <div class="output-header">
-            <span class="muted" id="aiOutputStatus"></span>
-            <button id="btnStop" class="small hidden">⏹ 停止</button>
-          </div>
-          <pre id="aiOutputText"></pre>
-        </div>
-
-        <!-- LLM 配置（admin only） -->
-        <div class="card" id="llmConfigCard">
-          <div class="row">
-            <h3>⚙️ LLM 配置</h3>
-            <span class="muted" id="llmConfigBadge">—</span>
-          </div>
-          <div id="llmConfigForm" class="hidden">
-            <div class="grid">
-              <label>Base URL
-                <input id="cfgBaseURL" placeholder="https://api.deepseek.com/v1" />
-              </label>
-              <label>模型
-                <input id="cfgModel" placeholder="deepseek-chat" />
-              </label>
-              <label>API Key
-                <input id="cfgApiKey" type="password" placeholder="留空保持不变" />
-              </label>
-            </div>
-            <div class="actions">
-              <button class="primary" id="btnCfgSave">保存</button>
-              <button id="btnCfgTest">🔌 测试连接</button>
-              <span class="muted" id="cfgStatus"></span>
-            </div>
-          </div>
-          <div id="llmConfigReadonly" class="muted">—</div>
-        </div>
       </section>
     </main>
 
-    <script defer src="app.js?v=6"></script>
+    <script defer src="app.js?v=11"></script>
     <link rel="stylesheet" href="styles.css?v=3" />
     <script>
       // ?nosw=1 临时禁用 Service Worker（用于诊断缓存问题）

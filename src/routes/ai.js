@@ -38,14 +38,78 @@ router.post('/config/test', requireAuth, requireAdmin, async (req, res) => {
   res.status(r.ok ? 200 : 400).json(r);
 });
 
+// ===== LLM token 用量统计（admin only）=====
+router.get('/usage', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const days = Math.min(parseInt(req.query.days, 10) || 30, 365);
+    const db = require('../db');
+    const raw = db.rawDb();
+    if (!raw) return res.status(500).json({ error: '数据库不可用' });
+
+    // 汇总（全部时间）
+    const totalRes = raw.exec(`SELECT
+        COALESCE(SUM(prompt_tokens),0) AS prompt,
+        COALESCE(SUM(completion_tokens),0) AS completion,
+        COALESCE(SUM(total_tokens),0) AS total,
+        COUNT(*) AS calls,
+        COUNT(DISTINCT model) AS models
+      FROM llm_usage`);
+    const totals = totalRes.length ? totalRes[0].values[0] : [0, 0, 0, 0, 0];
+
+    // 按日期（近 N 天）
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    const byDayRes = raw.exec(
+      `SELECT substr(created_at, 1, 10) AS d,
+              COUNT(*) AS calls,
+              SUM(prompt_tokens) AS prompt,
+              SUM(completion_tokens) AS completion,
+              SUM(total_tokens) AS total
+       FROM llm_usage
+       WHERE created_at >= ?
+       GROUP BY d
+       ORDER BY d DESC`,
+      [since]
+    );
+    const byDay = (byDayRes[0]?.values || []).map((r) => ({
+      date: r[0], calls: r[1], prompt_tokens: r[2], completion_tokens: r[3], total_tokens: r[4],
+    }));
+
+    // 按模型
+    const byModelRes = raw.exec(
+      `SELECT model, COUNT(*) AS calls, SUM(total_tokens) AS total
+       FROM llm_usage
+       GROUP BY model
+       ORDER BY total DESC`
+    );
+    const byModel = (byModelRes[0]?.values || []).map((r) => ({
+      model: r[0], calls: r[1], total_tokens: r[2],
+    }));
+
+    res.json({
+      totals: {
+        prompt_tokens: totals[0],
+        completion_tokens: totals[1],
+        total_tokens: totals[2],
+        calls: totals[3],
+        models: totals[4],
+      },
+      by_day: byDay,
+      by_model: byModel,
+      days,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ===== 自然语言对话 =====
 router.post('/chat', requireAuth, async (req, res) => {
-  const { message } = req.body || {};
+  const { message, enableSearch } = req.body || {};
   if (!message || !String(message).trim()) {
     return res.status(400).json({ error: 'message 必填' });
   }
   try {
-    const r = await nlp.chat(req.user.id, message);
+    const r = await nlp.chat(req.user.id, message, { enableSearch: !!enableSearch });
     res.json(r);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -57,8 +121,21 @@ router.get('/chat/history', requireAuth, (req, res) => {
   res.json({ items: nlp.getMemories(req.user.id, limit) });
 });
 
+// ===== 联网搜索 =====
+router.post('/search', requireAuth, async (req, res) => {
+  const { query, count } = req.body || {};
+  if (!query || !String(query).trim()) return res.status(400).json({ error: 'query 必填' });
+  try {
+    const websearch = require('../services/websearch');
+    const r = await websearch.search(String(query).trim(), { count: parseInt(count, 10) || 6 });
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post('/chat/stream', requireAuth, async (req, res) => {
-  const { message } = req.body || {};
+  const { message, enableSearch } = req.body || {};
   if (!message || !String(message).trim()) {
     return res.status(400).json({ error: 'message 必填' });
   }
@@ -75,7 +152,7 @@ router.post('/chat/stream', requireAuth, async (req, res) => {
 
   try {
     write('thinking', { stage: 'classify' });
-    const result = await nlp.chat(req.user.id, message);
+    const result = await nlp.chat(req.user.id, message, { enableSearch: !!enableSearch });
     write('intent', { intent: result.intent, confidence: result.confidence, data: result.data });
     // 流式输出 reply
     const reply = result.reply || '';

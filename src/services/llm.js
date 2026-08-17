@@ -111,9 +111,45 @@ async function callOnce(model, messages, opts) {
       },
       { signal: controller.signal }
     );
-    return resp.choices?.[0]?.message?.content || '';
+    const usage = resp.usage || {}; // { prompt_tokens, completion_tokens, total_tokens }
+    return {
+      text: resp.choices?.[0]?.message?.content || '',
+      usage: {
+        prompt_tokens: usage.prompt_tokens || 0,
+        completion_tokens: usage.completion_tokens || 0,
+        total_tokens: usage.total_tokens || 0,
+      },
+    };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * 记录一次 LLM 调用的 token 用量到 llm_usage 表
+ */
+function recordUsage(opts = {}) {
+  try {
+    const { model, prompt_tokens, completion_tokens, total_tokens, userId, intent } = opts;
+    if (!model || !total_tokens) return; // 无用量信息则跳过
+    const raw = db.rawDb();
+    if (!raw) return;
+    raw.run(
+      `INSERT INTO llm_usage (user_id, model, prompt_tokens, completion_tokens, total_tokens, intent, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userId || 0,
+        model,
+        prompt_tokens || 0,
+        completion_tokens || 0,
+        total_tokens || 0,
+        intent || '',
+        new Date().toISOString(),
+      ]
+    );
+    db.persist();
+  } catch (e) {
+    logger.warn('recordUsage failed:', e.message);
   }
 }
 
@@ -127,9 +163,18 @@ async function chat(messages, opts = {}) {
 
   for (let attempt = 0; attempt <= MAX_RETRIES(); attempt++) {
     try {
-      const text = await callOnce(model, messages, opts);
+      const { text, usage } = await callOnce(model, messages, opts);
       if (attempt > 0) logger.info(`LLM recovered after ${attempt} retry`);
-      return { ok: true, text, attempts: attempt + 1 };
+      // 记录 token 用量
+      recordUsage({
+        model,
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens,
+        userId: opts.userId,
+        intent: opts.intent,
+      });
+      return { ok: true, text, attempts: attempt + 1, usage };
     } catch (e) {
       lastErr = e;
       const status = e.status || e?.response?.status;
@@ -167,6 +212,7 @@ async function chatStream(messages, opts, onDelta) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS() * 2);
     let full = '';
+    let streamUsage = null;
     try {
       const stream = await c.chat.completions.create(
         {
@@ -175,6 +221,7 @@ async function chatStream(messages, opts, onDelta) {
           temperature: opts.temperature ?? 0.5,
           max_tokens: opts.max_tokens ?? 800,
           stream: true,
+          stream_options: { include_usage: true },
         },
         { signal: controller.signal }
       );
@@ -184,9 +231,21 @@ async function chatStream(messages, opts, onDelta) {
           full += delta;
           try { onDelta(delta, full); } catch (_) {}
         }
+        // 流式响应的 usage 在最后一个 chunk（choices 为空）
+        if (chunk.usage) streamUsage = chunk.usage;
       }
       clearTimeout(timer);
-      return { ok: true, text: full };
+      if (streamUsage) {
+        recordUsage({
+          model,
+          prompt_tokens: streamUsage.prompt_tokens,
+          completion_tokens: streamUsage.completion_tokens,
+          total_tokens: streamUsage.total_tokens,
+          userId: opts.userId,
+          intent: opts.intent,
+        });
+      }
+      return { ok: true, text: full, usage: streamUsage };
     } catch (e) {
       clearTimeout(timer);
       const status = e.status || e?.response?.status;
@@ -272,10 +331,12 @@ function updateConfig(patch) {
 
 module.exports = {
   isEnabled,
+  getClient,
   chat,
   chatStream,
   testConnection,
   getConfigView,
   updateConfig,
   resolveConfig,
+  recordUsage,
 };

@@ -59,7 +59,7 @@ async function summarize(userId) {
       },
       { role: 'user', content: `以下是当前的数据快照（JSON）：\n${JSON.stringify(snapshot, null, 2)}` },
     ],
-    { temperature: 0.3, max_tokens: 700 }
+    { temperature: 0.3, max_tokens: 700, userId, intent: 'summarize' }
   );
 }
 
@@ -75,7 +75,7 @@ async function advise(taskText) {
       },
       { role: 'user', content: taskText },
     ],
-    { temperature: 0.6, max_tokens: 500 }
+    { temperature: 0.6, max_tokens: 500, intent: 'advise' }
   );
 }
 
@@ -95,7 +95,7 @@ async function breakdown(taskText) {
       },
       { role: 'user', content: taskText },
     ],
-    { temperature: 0.3, max_tokens: 800 }
+    { temperature: 0.3, max_tokens: 800, intent: 'breakdown' }
   );
 }
 
@@ -121,7 +121,7 @@ async function dailyReport(userId) {
       },
       { role: 'user', content: JSON.stringify({ completed, stillOpen, events }, null, 2) },
     ],
-    { temperature: 0.4, max_tokens: 600 }
+    { temperature: 0.4, max_tokens: 600, userId, intent: 'daily_report' }
   );
 }
 
@@ -159,7 +159,7 @@ async function weeklyReport(userId) {
         ),
       },
     ],
-    { temperature: 0.4, max_tokens: 900 }
+    { temperature: 0.4, max_tokens: 900, userId, intent: 'weekly_report' }
   );
 }
 
@@ -198,7 +198,7 @@ async function monthlyReview(userId) {
         ),
       },
     ],
-    { temperature: 0.5, max_tokens: 1000 }
+    { temperature: 0.5, max_tokens: 1000, userId, intent: 'monthly_review' }
   );
 }
 

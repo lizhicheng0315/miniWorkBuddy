@@ -1,5 +1,5 @@
 /* WorkBuddy Service Worker - 静态资源离线缓存 */
-const CACHE = 'workbuddy-v3';
+const CACHE = 'workbuddy-v4';
 const PRECACHE = [
   '/',
   '/index.html',

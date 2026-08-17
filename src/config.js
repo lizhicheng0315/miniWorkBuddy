@@ -52,6 +52,7 @@ const config = {
     apiPerMin: envInt('RATELIMIT_API', 300),
     aiPerMin: envInt('RATELIMIT_AI', 30),
   },
+  bingSearchKey: envStr('BING_SEARCH_KEY', ''),
   tls: {
     enabled: envBool('TLS_ENABLED', false),
     key: envStr('TLS_KEY', './certs/server.key'),

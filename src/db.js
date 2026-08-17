@@ -116,6 +116,20 @@ function migrate() {
       created_at TEXT NOT NULL
     );
 
+    -- ===== v3：LLM token 用量记录 =====
+    CREATE TABLE IF NOT EXISTS llm_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      model TEXT NOT NULL,
+      prompt_tokens INTEGER DEFAULT 0,
+      completion_tokens INTEGER DEFAULT 0,
+      total_tokens INTEGER DEFAULT 0,
+      intent TEXT DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_llm_usage_user_time ON llm_usage(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_llm_usage_model ON llm_usage(model);
+
     -- 给所有数据表加 user_id 列（如不存在），用于多用户隔离
   `);
 
@@ -326,6 +340,7 @@ module.exports = {
   nowIso,
   snapshotAll,
   replaceAll,
+  persist,
   rawDb,
   _path: config.dataDir,
 };

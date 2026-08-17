@@ -239,6 +239,22 @@ LLM_MODEL=deepseek-chat
 
 控制开关：`.env` 里 `NLP_OFFLINE_FALLBACK=false`
 
+### 🌐 联网搜索
+
+对话里直接说「查一下XX」「搜索XX」「XX是什么」即可触发联网搜索：
+
+- 默认用 **DuckDuckGo**（免费、无需 key）
+- 可选配 **Bing Web Search API**（`.env` 里 `BING_SEARCH_KEY=`），质量更好
+- 有 LLM key 时：搜索 → LLM 汇总成一段可读回答 + 来源链接
+- 无 LLM key 时：直接列出搜索结果标题/摘要/链接
+
+```bash
+# 可选：配 Bing（免费订阅）
+# https://www.microsoft.com/en-us/bing/apis/bing-web-search-api
+# .env 里加：
+# BING_SEARCH_KEY=你的key
+```
+
 ## 🔐 多用户 & 安全
 
 - 启动时若没有任何用户，自动 `bootstrap` 一个 admin（用户名/密码从 `.env` 读）

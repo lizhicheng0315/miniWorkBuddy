@@ -62,46 +62,6 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
-// 流式 API：EventSource 不支持 POST，用 fetch + ReadableStream
-async function apiStream(path, body, onDelta) {
-  const res = await fetch(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error('HTTP ' + res.status + ': ' + t);
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    // SSE 消息以 \n\n 分隔
-    let idx;
-    while ((idx = buffer.indexOf('\n\n')) >= 0) {
-      const raw = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-      const lines = raw.split('\n');
-      let event = 'message', data = '';
-      for (const line of lines) {
-        if (line.startsWith('event:')) event = line.slice(6).trim();
-        else if (line.startsWith('data:')) data += line.slice(5).trim();
-      }
-      if (!data) continue;
-      try {
-        const payload = JSON.parse(data);
-        onDelta(event, payload);
-        if (event === 'done' || event === 'error') return event;
-      } catch (_) { /* ignore */ }
-    }
-  }
-  return 'done';
-}
-
 // ===== 登录 =====
 function showLogin() {
   $('#loginOverlay').classList.remove('hidden');
@@ -175,6 +135,39 @@ let todoFilter = 'all';
 let todoSort = 'priority';
 let todoAllCache = [];
 
+/**
+ * 截止时间相对格式：
+ *   已过期 N 分钟/小时/天
+ *   N 分钟后 / 今天 HH:MM / 明天 HH:MM / N 天后 / M/D
+ * @param {string|Date} due
+ * @returns {{ text:string, class:string }}
+ */
+function fmtDue(due) {
+  if (!due) return null;
+  const d = new Date(due);
+  if (isNaN(d)) return null;
+  const ms = d.getTime() - Date.now();
+  const abs = Math.abs(ms);
+  const min = Math.round(abs / 60000);
+  const h = d.getHours(), m = d.getMinutes();
+  const pad = (n) => String(n).padStart(2, '0');
+  const hm = `${pad(h)}:${pad(m)}`;
+
+  if (ms < 0) {
+    // 已过期
+    let text = '已过期 ';
+    if (min < 60) text += `${min} 分钟`;
+    else if (min < 1440) text += `${Math.floor(min / 60)} 小时`;
+    else text += `${Math.floor(min / 1440)} 天`;
+    return { text, class: 'due-overdue' };
+  }
+  if (min < 60) return { text: `${min} 分钟后`, class: 'due-soon' };
+  if (min < 1440) return { text: `今天 ${hm}`, class: 'due-soon' };
+  if (min < 2880) return { text: `明天 ${hm}`, class: 'due-soon' };
+  if (min < 10080) return { text: `${Math.floor(min / 1440)} 天后`, class: 'due-marker' };
+  return { text: `${d.getMonth() + 1}/${d.getDate()}`, class: 'due-marker' };
+}
+
 async function loadTodos() {
   todoAllCache = await api('/api/todos');
   renderTodos();
@@ -226,18 +219,20 @@ function renderTodos() {
   if (!list.length) { root.innerHTML = '<div class="muted">没有匹配的待办。</div>'; return; }
   for (const t of list) {
     const el = document.createElement('div');
-    const overdue = t.due_at && t.status !== 'done' && new Date(t.due_at) < new Date();
-    el.className = 'item p' + (t.priority || 2) + (t.status === 'done' ? ' done' : '') + (overdue ? ' overdue' : '');
     const due = t.due_at ? new Date(t.due_at) : null;
-    const dueText = due ? `截止 ${due.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : '';
+    const overdue = due && t.status !== 'done' && due < new Date();
+    el.className = 'item p' + (t.priority || 2) + (t.status === 'done' ? ' done' : '') + (overdue ? ' overdue' : '');
+    const dueInfo = t.due_at ? fmtDue(t.due_at) : null;
+    const dueText = dueInfo ? `截止 ${dueInfo.text}` : '';
+    const dueCls = dueInfo ? dueInfo.class : '';
     el.innerHTML = `
       <input type="checkbox" ${t.status === 'done' ? 'checked' : ''} data-id="${t.id}" class="toggle" />
       <div class="body">
         <div class="title">${escapeHtml(t.title)}</div>
         <div class="meta">
-          <span class="badge p${t.priority}">${['无','🔴 高','🟡 中','🔵 低'][t.priority] || '🟡 中'}</span>
+          <span class="badge p${t.priority}">${['','🔴 高','🟡 中','🔵 低'][t.priority] || '🟡 中'}</span>
           ${t.category ? `<span class="badge">${escapeHtml(t.category)}</span>` : ''}
-          ${dueText ? `<span class="due-marker">${dueText}${overdue ? ' ⚠️已过期' : ''}</span>` : ''}
+          ${dueText ? `<span class="${dueCls}">${dueText}</span>` : ''}
           ${t.notes ? `<span>· ${escapeHtml(t.notes)}</span>` : ''}
         </div>
       </div>
@@ -266,6 +261,72 @@ $$('.filter-chip').forEach((b) => b.addEventListener('click', () => {
 $('#todoSort').addEventListener('change', (e) => { todoSort = e.target.value; renderTodos(); });
 $('#btnTodoNew').addEventListener('click', () => $('#todoForm').classList.toggle('hidden'));
 $('#todoCancel').addEventListener('click', () => $('#todoForm').classList.add('hidden'));
+
+// ===== 快速添加待办（轻量解析：标题 + 优先级 + 分类；时间走高级表单）=====
+const PRIORITY_KEYWORDS = [
+  { kw: /^(?:高|重要|紧急|urgent|高优先级)/i, p: 1, label: '🔴 高' },
+  { kw: /^(?:低|不急|稍后|later)/i, p: 3, label: '🔵 低' },
+];
+function parseQuickInput(raw) {
+  let text = String(raw || '').trim();
+  if (!text) return null;
+  let priority = parseInt($('#quickTodoPriority').value, 10) || 2;
+  // 解析优先级关键字
+  for (const r of PRIORITY_KEYWORDS) {
+    if (r.kw.test(text)) { priority = r.p; text = text.replace(r.kw, '').trim(); break; }
+  }
+  // 解析分类 "工作：写周报" 或 "写周报 #工作" 或 "写周报 @工作"
+  let category = '';
+  const catColon = text.match(/^([\u4e00-\u9fa5A-Za-z0-9]+)\s*[:：]\s*(.+)$/);
+  if (catColon && catColon[1].length <= 8) { category = catColon[1]; text = catColon[2].trim(); }
+  else {
+    const hashCat = text.match(/[#@]([\u4e00-\u9fa5A-Za-z0-9]+)\s*$/);
+    if (hashCat) { category = hashCat[1]; text = text.replace(hashCat[0], '').trim(); }
+  }
+  // 清理残留分隔符
+  text = text.replace(/^[，。、\s]+|[，。、\s]+$/g, '').trim();
+  if (!text) return null;
+  return { title: text, priority, category: category || null };
+}
+
+function renderQuickHint() {
+  const raw = $('#quickTodoInput').value;
+  const hint = $('#quickTodoHint');
+  if (!raw.trim()) { hint.textContent = ''; return; }
+  const parsed = parseQuickInput(raw);
+  if (!parsed) { hint.textContent = ''; return; }
+  const parts = [];
+  parts.push(`将创建：<b>${escapeHtml(parsed.title)}</b>`);
+  parts.push(parsed.priority === 1 ? '🔴 高' : parsed.priority === 3 ? '🔵 低' : '🟡 中');
+  if (parsed.category) parts.push(`分类 <b>${escapeHtml(parsed.category)}</b>`);
+  hint.innerHTML = parts.join(' · ');
+}
+$('#quickTodoInput').addEventListener('input', renderQuickHint);
+$('#quickTodoPriority').addEventListener('change', renderQuickHint);
+$('#quickTodoForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = $('#quickTodoInput');
+  const parsed = parseQuickInput(input.value);
+  if (!parsed) { input.focus(); return; }
+  const btn = e.target.querySelector('button[type=submit]');
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    await api('/api/todos', { method: 'POST', body: parsed });
+    input.value = '';
+    $('#quickTodoHint').textContent = '';
+    await loadTodos();
+  } catch (err) {
+    alert('添加失败：' + (err.message || err));
+  } finally {
+    btn.disabled = false; btn.textContent = '添加';
+    input.focus();
+  }
+});
+// 进入待办页自动聚焦快速输入框
+function focusQuickTodoOnTab() { setTimeout(() => { const inp = $('#quickTodoInput'); if (inp) inp.focus(); }, 50); }
+// 切到 todos 标签时聚焦
+$$('.tab').forEach((b) => b.addEventListener('click', () => { if (b.dataset.tab === 'todos') focusQuickTodoOnTab(); }));
+focusQuickTodoOnTab();
 $('#todoForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
@@ -493,8 +554,14 @@ async function refreshLlmConfig() {
   const me = getUser();
   if (!me || !me.is_admin) {
     $('#llmConfigReadonly').textContent = '仅 admin 可见 / 可编辑';
+    const f = $('#llmConfigForm');
+    if (f) f.classList.add('hidden');
+    const uc = $('#usageCard');
+    if (uc) uc.classList.add('hidden');
     return;
   }
+  const f = $('#llmConfigForm');
+  if (f) f.classList.remove('hidden');
   try {
     const c = await api('/api/ai/config');
     const badge = c.source.apiKey ? '🟢 数据库' : (c.configured ? '🟡 .env' : '🔴 未配置');
@@ -505,10 +572,83 @@ async function refreshLlmConfig() {
     $('#cfgBaseURL').value = c.baseURL || '';
     $('#cfgModel').value = c.model || '';
     $('#cfgApiKey').value = '';
+    // 用量统计（admin 才能看到数据）
+    const uc = $('#usageCard');
+    if (uc) uc.classList.remove('hidden');
+    await refreshUsage();
   } catch (e) {
     $('#llmConfigReadonly').textContent = '读取失败：' + e.message;
   }
 }
+
+// ===== Token 用量统计 =====
+let usageDays = 7;
+async function refreshUsage() {
+  const me = getUser();
+  if (!me || !me.is_admin) return;
+  try {
+    const u = await api('/api/ai/usage?days=' + usageDays);
+    renderUsage(u);
+  } catch (e) {
+    const s = $('#usageSummary');
+    if (s) s.textContent = '用量读取失败: ' + e.message;
+  }
+}
+
+function renderUsage(u) {
+  // 汇总
+  const sum = $('#usageSummary');
+  if (!sum) return;
+  const t = u.totals || {};
+  const fmt = (n) => (n >= 1000000 ? (n / 1000000).toFixed(2) + 'M' : n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n));
+  sum.innerHTML = ''
+    + `<div class="usage-stat"><span class="num">${fmt(t.total_tokens || 0)}</span><span class="lbl">总 Token</span></div>`
+    + `<div class="usage-stat"><span class="num">${fmt(t.prompt_tokens || 0)}</span><span class="lbl">输入 Token</span></div>`
+    + `<div class="usage-stat"><span class="num">${fmt(t.completion_tokens || 0)}</span><span class="lbl">输出 Token</span></div>`
+    + `<div class="usage-stat"><span class="num">${t.calls || 0}</span><span class="lbl">调用次数</span></div>`
+    + `<div class="usage-stat"><span class="num">${t.models || 0}</span><span class="lbl">使用模型数</span></div>`;
+
+  // 按模型（横向条形）
+  const bm = $('#usageByModel');
+  if (bm) {
+    const models = u.by_model || [];
+    if (models.length) {
+      const max = Math.max(...models.map((m) => m.total_tokens || 0));
+      bm.innerHTML = models.map((m) => `
+        <div class="usage-model">
+          <span class="mname">${escapeHtml(m.model)}</span>
+          <span class="mbar"><i style="width:${max ? Math.round((m.total_tokens / max) * 100) : 0}%"></i></span>
+          <span class="mval">${fmt(m.total_tokens)} tokens · ${m.calls} 次</span>
+        </div>`).join('');
+    } else {
+      bm.innerHTML = '';
+    }
+  }
+
+  // 按日期（柱状图）
+  const chart = $('#usageChart');
+  if (chart) {
+    const days = u.by_day || [];
+    if (!days.length) {
+      chart.innerHTML = '<span class="muted" style="margin:auto">近 ' + usageDays + ' 天无调用记录</span>';
+      return;
+    }
+    const maxV = Math.max(...days.map((d) => d.total_tokens || 0));
+    chart.innerHTML = days.slice().reverse().map((d) => {
+      const h = maxV ? Math.max(6, Math.round(((d.total_tokens || 0) / maxV) * 100)) : 6;
+      return `<div class="bar" style="height:${h}%" data-date="${escapeHtml(d.date)}" title="${escapeHtml(d.date)} · ${fmt(d.total_tokens)} tokens · ${d.calls}次"></div>`;
+    }).join('');
+  }
+}
+
+$$('.usage-range-btn').forEach((b) => {
+  b.addEventListener('click', () => {
+    usageDays = parseInt(b.dataset.days, 10) || 7;
+    $$('.usage-range-btn').forEach((x) => x.classList.remove('active'));
+    b.classList.add('active');
+    refreshUsage();
+  });
+});
 
 $('#btnCfgSave').addEventListener('click', async () => {
   const body = {};
@@ -548,116 +688,6 @@ $('#btnCfgTest').addEventListener('click', async () => {
     }
   } catch (e) {
     $('#cfgStatus').textContent = '❌ ' + e.message;
-  }
-});
-
-// ===== 流式 AI 输出 =====
-let currentStreamAbort = null;
-function showAiOutput(text) {
-  const box = $('#aiOutput');
-  $('#aiOutputText').textContent = text;
-  $('#aiOutputText').classList.remove('cursor-blink');
-  box.classList.remove('hidden');
-}
-function showAiStatus(text) { $('#aiOutputStatus').textContent = text; }
-
-async function streamAction(messagesBuilder, label) {
-  // 取消上一次
-  if (currentStreamAbort) currentStreamAbort.abort();
-  currentStreamAbort = new AbortController();
-
-  const messages = messagesBuilder();
-  showAiOutput('');
-  showAiStatus('⏳ ' + label + '…');
-  $('#btnStop').classList.remove('hidden');
-  $('#aiOutputText').classList.add('cursor-blink');
-
-  try {
-    const event = await apiStream('/api/ai/stream', { messages, max_tokens: 800 }, (ev, payload) => {
-      if (ev === 'delta') {
-        $('#aiOutputText').textContent = payload.full;
-        showAiStatus('✍️ 正在生成…');
-      } else if (ev === 'done') {
-        showAiStatus('✅ 完成 · ' + (payload.text || '').length + ' 字');
-      } else if (ev === 'error') {
-        showAiOutput('❌ ' + (payload.error || '未知错误'));
-        showAiStatus('❌ 失败');
-      }
-    });
-    if (event === 'error') {
-      // 已显示
-    }
-  } catch (e) {
-    showAiOutput('❌ ' + e.message);
-    showAiStatus('❌ 失败');
-  } finally {
-    $('#aiOutputText').classList.remove('cursor-blink');
-    $('#btnStop').classList.add('hidden');
-    currentStreamAbort = null;
-  }
-}
-
-$('#btnStop').addEventListener('click', () => {
-  if (currentStreamAbort) { currentStreamAbort.abort(); currentStreamAbort = null; showAiStatus('⏹ 已停止'); }
-});
-
-// 非流式按钮（用于不需要流式体验的简单建议）
-$('#btnAdvise').addEventListener('click', async () => {
-  const task = $('#adviseText').value.trim();
-  if (!task) return alert('请先输入任务描述');
-  streamAction(() => [
-    { role: 'system', content: '你是一个务实的工作教练。给定一个任务，请给出：1) 拆解步骤（3-5 条）；2) 可能的风险/卡点；3) 一句鼓励。语言简洁中文，200 字内。' },
-    { role: 'user', content: task },
-  ], '生成建议');
-});
-
-$('#btnSummarize').addEventListener('click', () => streamAction(() => {
-  // 让后端拿数据再发；这里直接构造请求让前端用 messages 模式
-  // 简化：直接走非流式端点拿到完整 prompt 让用户感受到流式
-  return [
-    { role: 'system', content: '你是一个高效的个人助理。请基于下方数据生成中文摘要：今日重点 / 日程安排 / 建议。' },
-    { role: 'user', content: '请帮我总结今天的任务（你需要假装看到一堆 todo 和日程）' },
-  ];
-}, '今日摘要'));
-
-$('#btnReport').addEventListener('click', () => streamAction(() => [
-  { role: 'system', content: '你是个人助理，请生成一份今日日报，包含：今日完成 / 未完成 / 明日建议。' },
-  { role: 'user', content: '请生成今日日报样例' },
-], '今日日报'));
-
-$('#btnWeekly').addEventListener('click', () => streamAction(() => [
-  { role: 'system', content: '你是个人助理，基于本周数据生成周报：本周完成概览 / 分类产出 / 风险 / 下周建议。' },
-  { role: 'user', content: '请生成本周周报样例' },
-], '本周周报'));
-
-$('#btnMonthly').addEventListener('click', () => streamAction(() => [
-  { role: 'system', content: '你是个人助理，基于本月数据做月度复盘：数据概览 / 产出分布 / 习惯信号 / 下月建议。' },
-  { role: 'user', content: '请生成本月复盘样例' },
-], '月度复盘'));
-
-$('#btnBreakdown').addEventListener('click', async () => {
-  const task = $('#breakdownText').value.trim();
-  if (!task) return alert('请先输入要拆解的任务');
-  const out = $('#breakdownOutput');
-  out.classList.remove('hidden');
-  out.textContent = '拆解中…';
-  showAiOutput('');
-  showAiStatus('⏳ 拆解任务…');
-  try {
-    const r = await api('/api/ai/breakdown', { method: 'POST', body: { task } });
-    if (r.text) {
-      try {
-        const obj = JSON.parse(r.text);
-        out.textContent = JSON.stringify(obj, null, 2);
-        if (obj.summary) showAiOutput('🧩 ' + obj.summary);
-      } catch {
-        out.textContent = r.text;
-      }
-    } else {
-      out.textContent = r.error || '无内容';
-    }
-  } catch (e) {
-    out.textContent = '❌ ' + e.message;
   }
 });
 
@@ -767,28 +797,106 @@ setInterval(async () => {
 // ===== 对话 Tab =====
 let chatAbort = null;
 
+const CHAT_EMPTY_HTML = ``
+  + `<div class="chat-empty" id="chatEmpty">`
+  + `  <div class="chat-empty-ico">💬</div>`
+  + `  <div class="chat-empty-title">你好，我是 WorkBuddy 助手</div>`
+  + `  <div class="chat-empty-sub">用自然语言管理待办、日程和提醒，试试这样说：</div>`
+  + `  <div class="chat-empty-chips">`
+  + `    <button class="chip" data-sample="明天下午3点开项目周会">📅 明天下午3点开会</button>`
+  + `    <button class="chip" data-sample="提醒我买牛奶">✅ 提醒我买牛奶</button>`
+  + `    <button class="chip" data-sample="每天9点提醒我写日报">⏰ 每天9点写日报</button>`
+  + `    <button class="chip" data-sample="我今天还有什么没做">📋 我今天还有什么没做</button>`
+  + `    <button class="chip" data-sample="生成今日日报">📝 生成今日日报</button>`
+  + `    <button class="chip" data-sample="把买牛奶标记完成">✔️ 把买牛奶标记完成</button>`
+  + `  </div>`
+  + `</div>`;
+
+function nowTime() {
+  return new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * 追加一条聊天消息（新蓝白气泡结构）
+ * @returns 消息正文的 .text span（供流式更新）
+ */
 function appendChat(container, role, text, intent) {
   const empty = container.querySelector('.chat-empty');
   if (empty) empty.remove();
+
   const el = document.createElement('div');
   el.className = 'chat-msg ' + role;
+
+  // 头像
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.textContent = role === 'user' ? '👤' : '🤖';
+  el.appendChild(avatar);
+
+  // 主体（intent tag + 内容）
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-main';
   if (role === 'bot' && intent) {
     const tag = document.createElement('span');
     tag.className = 'intent-tag';
     tag.textContent = intent;
-    el.appendChild(tag);
+    wrap.appendChild(tag);
   }
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble';
   const span = document.createElement('span');
   span.className = 'text';
   span.textContent = text;
-  el.appendChild(span);
+  bubble.appendChild(span);
+  wrap.appendChild(bubble);
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  meta.textContent = nowTime();
+  wrap.appendChild(meta);
+  el.appendChild(wrap);
+
   container.appendChild(el);
   container.scrollTop = container.scrollHeight;
   return span;
 }
 
 function setChatStatus(text) {
-  $('#chatStatus').textContent = text || '—';
+  const el = $('#chatStatus');
+  if (el) el.textContent = text || '为你服务';
+}
+
+function clearChat() {
+  const win = $('#chatWindow');
+  if (!win) return;
+  win.innerHTML = CHAT_EMPTY_HTML;
+  bindChips();
+}
+
+function bindChips() {
+  $$('#chatEmpty .chip').forEach((c) => {
+    c.addEventListener('click', () => {
+      const v = c.dataset.sample || '';
+      const inp = $('#chatInput');
+      if (inp) inp.value = v;
+      sendChat();
+    });
+  });
+}
+
+function sendChat() {
+  const inp = $('#chatInput');
+  const v = inp ? inp.value.trim() : '';
+  if (!v) return;
+  inp.value = '';
+  autoResizeInput();
+  sendChatMessage(v, $('#chatWindow'), { onStop: $('#btnChatStop') });
+}
+
+function autoResizeInput() {
+  const t = $('#chatInput');
+  if (!t) return;
+  t.style.height = 'auto';
+  t.style.height = Math.max(40, Math.min(140, t.scrollHeight)) + 'px';
 }
 
 async function sendChatMessage(message, container, opts = {}) {
@@ -798,12 +906,12 @@ async function sendChatMessage(message, container, opts = {}) {
   const thinking = appendChat(container, 'thinking', '正在理解…');
   if (opts.onStop) opts.onStop.classList.remove('hidden');
 
-  let botEl = null, botText = null;
+  let botTextEl = null;
   try {
     const res = await fetch('/api/ai/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, enableSearch: webSearchEnabled() }),
     });
     if (!res.ok) {
       const t = await res.text();
@@ -832,85 +940,71 @@ async function sendChatMessage(message, container, opts = {}) {
         let payload = {};
         try { payload = JSON.parse(data); } catch (_) {}
         if (event === 'thinking') {
-          thinking.classList.remove('thinking');
-          // thinking 就是 appendChat 返回的 .text span，直接 set textContent
+          // thinking 就是 appendChat 返回的 .text span
           thinking.textContent = '正在生成回复…';
         } else if (event === 'intent') {
           intent = payload.intent;
-          setChatStatus(`意图: ${intent}`);
+          setChatStatus(`意图识别: ${intent}`);
         } else if (event === 'delta') {
           if (thinking.parentNode) thinking.remove();
-          if (!botEl) {
-            botEl = appendChat(container, 'bot', '', intent);
-            botText = botEl;
+          if (!botTextEl) {
+            botTextEl = appendChat(container, 'bot', '', intent);
           }
           fullText += payload.text || '';
-          botText.textContent = fullText;
+          botTextEl.textContent = fullText;
           container.scrollTop = container.scrollHeight;
         } else if (event === 'done') {
-          setChatStatus('✅');
+          setChatStatus('已回复 ✓');
         } else if (event === 'error') {
           if (thinking.parentNode) thinking.remove();
-          appendChat(container, 'bot', '❌ ' + (payload.error || '失败'));
-          setChatStatus('❌');
+          appendChat(container, 'bot', '❌ ' + (payload.error || '出错了'));
+          setChatStatus('出错');
         }
       }
     }
   } catch (e) {
-    if (thinking.parentNode) thinking.remove();
+    if (thinking && thinking.parentNode) thinking.remove();
     appendChat(container, 'bot', '❌ ' + e.message);
-    setChatStatus('❌');
+    setChatStatus('网络错误');
   } finally {
     if (opts.onStop) opts.onStop.classList.add('hidden');
   }
 }
 
-// 主对话 Tab
+// 主对话 Tab 事件
+$('#chatInput').addEventListener('input', autoResizeInput);
 $('#chatInput').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    const v = $('#chatInput').value.trim();
-    if (!v) return;
-    $('#chatInput').value = '';
-    sendChatMessage(v, $('#chatWindow'), { onStop: $('#btnChatStop') });
+    sendChat();
   }
 });
-$('#btnChatSend').addEventListener('click', () => {
-  const v = $('#chatInput').value.trim();
-  if (!v) return;
-  $('#chatInput').value = '';
-  sendChatMessage(v, $('#chatWindow'), { onStop: $('#btnChatStop') });
-});
+$('#btnChatSend').addEventListener('click', sendChat);
+$('#btnChatClear').addEventListener('click', () => clearChat());
 $('#btnChatStop').addEventListener('click', () => {
   if (chatAbort) { chatAbort.abort(); chatAbort = null; setChatStatus('⏹ 已停止'); }
 });
-$$('#chatEmpty li').forEach((li) => {
-  li.addEventListener('click', () => {
-    $('#chatInput').value = li.textContent.replace(/[「」]/g, '');
-    $('#btnChatSend').click();
-  });
-});
 
-// 智能助手 Tab 快速对话
-console.log('[WorkBuddy] binding quickChat handlers, btnQuickChat =', !!$('#btnQuickChat'), 'quickChatInput =', !!$('#quickChatInput'));
-$('#btnQuickChat').addEventListener('click', () => {
-  const v = $('#quickChatInput').value.trim();
-  console.log('[WorkBuddy] quickChat send:', v);
-  if (!v) return;
-  $('#quickChatInput').value = '';
-  sendChatMessage(v, $('#quickChatLog'));
+// ===== 联网搜索开关 =====
+const WS_KEY = 'workbuddy_websearch';
+function webSearchEnabled() {
+  return localStorage.getItem(WS_KEY) === '1';
+}
+function renderWebSearchToggle() {
+  const btn = $('#btnWebSearchToggle');
+  if (!btn) return;
+  btn.classList.toggle('on', webSearchEnabled());
+  btn.title = webSearchEnabled() ? '联网搜索已开启' : '联网搜索已关闭';
+}
+$('#btnWebSearchToggle').addEventListener('click', () => {
+  const on = !webSearchEnabled();
+  localStorage.setItem(WS_KEY, on ? '1' : '0');
+  renderWebSearchToggle();
+  setChatStatus(on ? '🔍 联网搜索已开启' : '🔌 联网搜索已关闭（仅本地智能）');
 });
-$('#quickChatInput').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); $('#btnQuickChat').click(); }
-});
-$('#openFullChat').addEventListener('click', (e) => {
-  e.preventDefault();
-  $$('.tab').forEach((b) => b.classList.remove('active'));
-  $$('.panel').forEach((p) => p.classList.remove('active'));
-  document.querySelector('[data-tab="chat"]').classList.add('active');
-  $('#panel-chat').classList.add('active');
-  $('#chatInput').focus();
-});
+renderWebSearchToggle();
+
+bindChips();
 
 // 切到 chat tab 时聚焦输入框
 $$('.tab').forEach((btn) => {
