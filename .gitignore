@@ -35,3 +35,8 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# 推送脚本（含 PAT 模板，绝不入库）
+push-to-github.ps1
+*-to-github*.ps1
+*.pat
