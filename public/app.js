@@ -1128,23 +1128,69 @@ function autoResizeInput() {
 }
 
 /**
- * 移除 thinking 气泡（整个 .chat-msg.thinking 元素，而非仅内层文字 span）
+ * 创建 bot 消息骨架（NextChat 式数据驱动：消息节点一开始就存在，
+ * 打字指示器在气泡内部，流式填充同一节点 —— 无临时元素、无残留可能）
+ * @returns {{ el: HTMLElement, bubble: HTMLElement }}
  */
-function removeThinking() {
-  $$('#chatWindow .chat-msg.thinking').forEach((el) => el.remove());
+function appendBotSkeleton(container, intent) {
+  const empty = container.querySelector('.chat-empty');
+  if (empty) empty.remove();
+  const el = document.createElement('div');
+  el.className = 'chat-msg bot';
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.textContent = '🤖';
+  el.appendChild(avatar);
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-main';
+  if (intent) {
+    const tag = document.createElement('span');
+    tag.className = 'intent-tag';
+    tag.textContent = intent;
+    wrap.appendChild(tag);
+  }
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble typing';
+  bubble.innerHTML = '<span class="typing-dots"><i></i><i></i><i></i></span>';
+  wrap.appendChild(bubble);
+  // 操作栏（hover 显示）
+  const ops = document.createElement('div');
+  ops.className = 'msg-ops';
+  ops.innerHTML = `
+    <button class="msg-op" data-op="copy" title="复制回复">📋 复制</button>
+    <button class="msg-op" data-op="regen" title="重新生成">🔄 重新生成</button>`;
+  wrap.appendChild(ops);
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  meta.textContent = nowTime();
+  wrap.appendChild(meta);
+  el.appendChild(wrap);
+  container.appendChild(el);
+  container.scrollTop = container.scrollHeight;
+  return { el, bubble };
+}
+
+/** 在 bot 消息之前插入工具转录条（保持"先操作后回答"的视觉顺序） */
+function insertToolStepBefore(container, botEl, step) {
+  const stepEl = document.createElement('div');
+  stepEl.className = 'tool-step';
+  stepEl.innerHTML = `<span class="ts-icon">${step.icon || '🔧'}</span><span class="ts-text"></span>`;
+  stepEl.querySelector('.ts-text').textContent = step.text || '';
+  container.insertBefore(stepEl, botEl);
+  container.scrollTop = container.scrollHeight;
 }
 
 async function sendChatMessage(message, container, opts = {}) {
   if (!message || !message.trim()) return;
-  // 清扫残留：上一次请求异常中断时遗留的 thinking 气泡
-  removeThinking();
   appendChat(container, 'user', message);
   setChatStatus('思考中…');
-  const thinking = appendChat(container, 'thinking', '正在理解…');
+  // bot 消息骨架立即存在（含打字点），后续所有更新都作用于它
+  const { el: botEl, bubble } = appendBotSkeleton(container, null);
   if (opts.onStop) opts.onStop.classList.remove('hidden');
 
-  let botTextEl = null;
-  chatAbort = new AbortController(); // 支持真正中断
+  let fullText = '';
+  let streaming = false; // 是否已开始填充内容
+  chatAbort = new AbortController();
   try {
     const res = await fetch('/api/ai/chat/stream', {
       method: 'POST',
@@ -1159,8 +1205,6 @@ async function sendChatMessage(message, container, opts = {}) {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let fullText = '';
-    let intent = null;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -1178,53 +1222,31 @@ async function sendChatMessage(message, container, opts = {}) {
         if (!data) continue;
         let payload = {};
         try { payload = JSON.parse(data); } catch (_) {}
-        if (event === 'thinking') {
-          // thinking 就是 appendChat 返回的 .text span
-          thinking.textContent = '正在生成回复…';
-        } else if (event === 'tool') {
-          // 工具操作转录（MiniCode transcript）：显示助手执行了什么
-          removeThinking();
-          appendToolStep(container, payload);
+        if (event === 'tool') {
+          insertToolStepBefore(container, botEl, payload);
           setChatStatus('🔧 ' + (payload.text || '执行操作…'));
         } else if (event === 'intent') {
-          intent = payload.intent;
-          setChatStatus(`意图识别: ${intent}`);
+          setChatStatus(`意图识别: ${payload.intent}`);
         } else if (event === 'delta') {
-          removeThinking();
-          if (!botTextEl) {
-            botTextEl = appendChat(container, 'bot', '', intent);
-            botTextEl.classList.add('md-body', 'streaming'); // 流式打字机光标
-          }
+          if (!streaming) { bubble.classList.remove('typing'); bubble.classList.add('md-body', 'streaming'); streaming = true; }
           fullText += payload.text || '';
-          botTextEl.innerHTML = renderMarkdown(fullText);
-          container.scrollTop = container.scrollHeight;
+          // 仅当用户在底部附近才自动滚动（NextChat 行为：不打断用户回看）
+          const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 140;
+          bubble.innerHTML = renderMarkdown(fullText);
+          if (nearBottom) container.scrollTop = container.scrollHeight;
         } else if (event === 'done') {
-          // 收尾：确保 thinking 被移除
-          removeThinking();
-          // 兜底：某些路径没有 delta（如纯工具执行），用 done.reply 渲染
-          if (!fullText.trim() && payload.reply) {
-            if (!botTextEl) {
-              botTextEl = appendChat(container, 'bot', '', intent);
-              botTextEl.classList.add('md-body');
-            }
-            fullText = payload.reply;
+          if (!fullText.trim() && payload.reply) fullText = payload.reply;
+          if (fullText.trim()) {
+            bubble.classList.remove('typing', 'streaming');
+            bubble.classList.add('md-body');
+            bubble.innerHTML = renderMarkdown(fullText);
+            setChatStatus('已回复 ✓');
+            if (voiceEnabled()) speakText(fullText.trim());
+          } else {
+            botEl.remove(); // 空回复：整个消息移除
+            setChatStatus('已回复 ✓');
           }
-          // 最终 Markdown 渲染（去掉流式光标）
-          if (botTextEl) {
-            botTextEl.classList.remove('streaming');
-            botTextEl.innerHTML = renderMarkdown(fullText);
-            container.scrollTop = container.scrollHeight;
-          }
-          // 清理：如果回复仍为空（异常情况），移除避免"空气泡"
-          if (!fullText.trim() && botTextEl) {
-            const bubble = botTextEl.closest('.chat-msg');
-            if (bubble) bubble.remove();
-            botTextEl = null;
-          }
-          setChatStatus('已回复 ✓');
-          if (voiceEnabled() && fullText.trim()) speakText(fullText.trim());
         } else if (event === 'error') {
-          removeThinking();
           const raw = payload.error || '出错了';
           let msg = '❌ ' + raw;
           if (/503|Endpoint is unavailable|server_error|upstream/i.test(raw)) {
@@ -1234,22 +1256,23 @@ async function sendChatMessage(message, container, opts = {}) {
           } else if (/429|rate.?limit|限流/i.test(raw)) {
             msg = '⚠️ LLM 触发限流（429）\n\n请降低请求频率，或升级服务商配额。';
           }
-          const errSpan = appendChat(container, 'bot', msg);
-          errSpan.classList.add('md-body');
-          errSpan.innerHTML = renderMarkdown(msg);
+          bubble.classList.remove('typing', 'streaming');
+          bubble.classList.add('md-body', 'is-error');
+          bubble.innerHTML = renderMarkdown(msg);
           setChatStatus('出错');
         }
       }
     }
   } catch (e) {
-    removeThinking();
-    // 用户主动停止（AbortError）不算错误，不显示红字
     if (e.name === 'AbortError') {
+      // 用户停止：有内容保留部分回答，没内容移除整条
+      if (!fullText.trim()) botEl.remove();
+      else { bubble.classList.remove('typing', 'streaming'); bubble.classList.add('md-body'); bubble.innerHTML = renderMarkdown(fullText); }
       setChatStatus('⏹ 已停止');
     } else {
-      const errSpan = appendChat(container, 'bot', '❌ ' + e.message);
-      errSpan.classList.add('md-body');
-      errSpan.innerHTML = renderMarkdown('❌ ' + e.message);
+      bubble.classList.remove('typing', 'streaming');
+      bubble.classList.add('md-body', 'is-error');
+      bubble.innerHTML = renderMarkdown('❌ ' + e.message);
       setChatStatus('网络错误');
     }
   } finally {
@@ -1330,7 +1353,6 @@ $('#chatWindow').addEventListener('click', (e) => {
     let p = msgEl.previousElementSibling;
     while (p && p.classList.contains('tool-step')) { toRemove = p; p = p.previousElementSibling; }
     if (toRemove && toRemove.classList.contains('chat-msg')) toRemove.remove();
-    removeThinking();
     sendChatMessage(userText, $('#chatWindow'), {
       onStop: $('#btnChatStop'),
       onSettled: () => {
@@ -1346,7 +1368,6 @@ $('#btnChatStop').addEventListener('click', () => {
     chatAbort.abort();
     chatAbort = null;
     setChatStatus('⏹ 已停止');
-    removeThinking(); // 清理残留的 thinking 气泡
   }
 });
 
