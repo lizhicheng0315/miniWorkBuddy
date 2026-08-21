@@ -938,6 +938,83 @@ function appendToolStep(container, step) {
 }
 
 /**
+ * 轻量 Markdown 渲染器（零依赖、XSS 安全）
+ * 策略：先整体 HTML 转义 → 再在"已转义文本"上做 md→html 转换
+ */
+function escapeMd(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function renderMarkdown(src) {
+  const text = escapeMd(src);
+  const codeBlocks = [];
+  let t = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const i = codeBlocks.length;
+    codeBlocks.push({ lang: (lang || '').toLowerCase(), code: code.replace(/\n$/, '') });
+    return `\u0000CODE${i}\u0000`;
+  });
+  t = t
+    .replace(/`([^`\n]+)`/g, '<code class="md-code">$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+    .replace(/~~([^~]+)~~/g, '<del>$1</del>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  const lines = t.split('\n');
+  const out = [];
+  let listType = null;
+  let para = [];
+  const flushPara = () => { if (para.length) { out.push(`<p>${para.join('<br>')}</p>`); para = []; } };
+  const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = null; } };
+  for (const line of lines) {
+    if (/^\u0000CODE\d+\u0000$/.test(line.trim())) { flushPara(); closeList(); out.push(line.trim()); continue; }
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    if (h) { flushPara(); closeList(); out.push(`<h${Math.min(4, h[1].length + 2)} class="md-h">${h[2]}</h${Math.min(4, h[1].length + 2)}>`); continue; }
+    const ul = line.match(/^\s*[-•*]\s+(.*)$/);
+    const ol = line.match(/^\s*(\d+)[.、]\s+(.*)$/);
+    if (ul && !ol) {
+      flushPara();
+      if (listType !== 'ul') { closeList(); out.push('<ul class="md-list">'); listType = 'ul'; }
+      out.push(`<li>${ul[1]}</li>`);
+      continue;
+    }
+    if (ol) {
+      flushPara();
+      if (listType !== 'ol') { closeList(); out.push('<ol class="md-list">'); listType = 'ol'; }
+      out.push(`<li>${ol[2]}</li>`);
+      continue;
+    }
+    if (!line.trim()) { flushPara(); closeList(); continue; }
+    para.push(line);
+  }
+  flushPara(); closeList();
+  return out.join('\n').replace(/\u0000CODE(\d+)\u0000/g, (_, i) => {
+    const cb = codeBlocks[Number(i)];
+    if (!cb) return '';
+    return renderCodeBlock(cb.code, cb.lang);
+  });
+}
+/** 极简代码高亮 */
+function highlightCode(code, lang) {
+  let h = escapeMd(code);
+  h = h.replace(/(&quot;[^&]*?&quot;|&#39;[^&]*?&#39;)/g, '<span class="tok-str">$1</span>');
+  if (!lang || /^(js|javascript|ts|typescript|json|jsx|tsx)$/i.test(lang)) {
+    h = h.replace(/(\/\/[^\n]*)/g, '<span class="tok-com">$1</span>');
+    h = h.replace(/\/\*[\s\S]*?\*\//g, '<span class="tok-com">$1</span>');
+    h = h.replace(/\b(const|let|var|function|return|if|else|for|while|class|new|async|await|import|export|from|try|catch|throw|typeof|null|undefined|true|false|this)\b/g, '<span class="tok-kw">$1</span>');
+  } else if (/^(py|python)$/i.test(lang)) {
+    h = h.replace(/(#[^\n]*)/g, '<span class="tok-com">$1</span>');
+    h = h.replace(/\b(def|return|if|elif|else|for|while|class|import|from|try|except|raise|with|as|lambda|None|True|False|self|print)\b/g, '<span class="tok-kw">$1</span>');
+  }
+  h = h.replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="tok-num">$1</span>');
+  return h;
+}
+function renderCodeBlock(code, lang) {
+  const id = 'cb' + Math.random().toString(36).slice(2, 8);
+  return `<div class="code-block"><div class="cb-head"><span class="cb-lang">${escapeMd(lang || 'code')}</span><button class="cb-copy" data-copy="${id}">复制</button></div><pre id="${id}"><code>${highlightCode(code, lang)}</code></pre></div>`;
+}
+
+/**
  * 追加一条聊天消息（新蓝白气泡结构）
  * @returns 消息正文的 .text span（供流式更新）
  */
@@ -970,6 +1047,17 @@ function appendChat(container, role, text, intent) {
   span.textContent = text;
   bubble.appendChild(span);
   wrap.appendChild(bubble);
+
+  // bot 消息操作栏（复制 / 重新生成）
+  if (role === 'bot') {
+    const ops = document.createElement('div');
+    ops.className = 'msg-ops';
+    ops.innerHTML = `
+      <button class="msg-op" data-op="copy" title="复制回复">📋 复制</button>
+      <button class="msg-op" data-op="regen" title="重新生成">🔄 重新生成</button>`;
+    wrap.appendChild(ops);
+  }
+
   const meta = document.createElement('div');
   meta.className = 'msg-meta';
   meta.textContent = nowTime();
@@ -1039,19 +1127,30 @@ function autoResizeInput() {
   t.style.height = Math.max(40, Math.min(140, t.scrollHeight)) + 'px';
 }
 
+/**
+ * 移除 thinking 气泡（整个 .chat-msg.thinking 元素，而非仅内层文字 span）
+ */
+function removeThinking() {
+  $$('#chatWindow .chat-msg.thinking').forEach((el) => el.remove());
+}
+
 async function sendChatMessage(message, container, opts = {}) {
   if (!message || !message.trim()) return;
+  // 清扫残留：上一次请求异常中断时遗留的 thinking 气泡
+  removeThinking();
   appendChat(container, 'user', message);
   setChatStatus('思考中…');
   const thinking = appendChat(container, 'thinking', '正在理解…');
   if (opts.onStop) opts.onStop.classList.remove('hidden');
 
   let botTextEl = null;
+  chatAbort = new AbortController(); // 支持真正中断
   try {
     const res = await fetch('/api/ai/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
       body: JSON.stringify({ message, enableSearch: webSearchEnabled() }),
+      signal: chatAbort.signal,
     });
     if (!res.ok) {
       const t = await res.text();
@@ -1084,34 +1183,40 @@ async function sendChatMessage(message, container, opts = {}) {
           thinking.textContent = '正在生成回复…';
         } else if (event === 'tool') {
           // 工具操作转录（MiniCode transcript）：显示助手执行了什么
-          if (thinking.parentNode) thinking.remove();
+          removeThinking();
           appendToolStep(container, payload);
           setChatStatus('🔧 ' + (payload.text || '执行操作…'));
         } else if (event === 'intent') {
           intent = payload.intent;
           setChatStatus(`意图识别: ${intent}`);
         } else if (event === 'delta') {
-          if (thinking.parentNode) thinking.remove();
+          removeThinking();
           if (!botTextEl) {
             botTextEl = appendChat(container, 'bot', '', intent);
+            botTextEl.classList.add('md-body', 'streaming'); // 流式打字机光标
           }
           fullText += payload.text || '';
-          botTextEl.textContent = fullText;
+          botTextEl.innerHTML = renderMarkdown(fullText);
           container.scrollTop = container.scrollHeight;
         } else if (event === 'done') {
           // 收尾：确保 thinking 被移除
-          if (thinking.parentNode) thinking.remove();
+          removeThinking();
           // 兜底：某些路径没有 delta（如纯工具执行），用 done.reply 渲染
           if (!fullText.trim() && payload.reply) {
             if (!botTextEl) {
               botTextEl = appendChat(container, 'bot', '', intent);
+              botTextEl.classList.add('md-body');
             }
             fullText = payload.reply;
-            botTextEl.textContent = fullText;
+          }
+          // 最终 Markdown 渲染（去掉流式光标）
+          if (botTextEl) {
+            botTextEl.classList.remove('streaming');
+            botTextEl.innerHTML = renderMarkdown(fullText);
             container.scrollTop = container.scrollHeight;
           }
-          // 清理：如果 bot 气泡仍是空的（异常情况），移除避免"空气泡"
-          if (botTextEl && !fullText.trim()) {
+          // 清理：如果回复仍为空（异常情况），移除避免"空气泡"
+          if (!fullText.trim() && botTextEl) {
             const bubble = botTextEl.closest('.chat-msg');
             if (bubble) bubble.remove();
             botTextEl = null;
@@ -1119,7 +1224,7 @@ async function sendChatMessage(message, container, opts = {}) {
           setChatStatus('已回复 ✓');
           if (voiceEnabled() && fullText.trim()) speakText(fullText.trim());
         } else if (event === 'error') {
-          if (thinking.parentNode) thinking.remove();
+          removeThinking();
           const raw = payload.error || '出错了';
           let msg = '❌ ' + raw;
           if (/503|Endpoint is unavailable|server_error|upstream/i.test(raw)) {
@@ -1129,15 +1234,24 @@ async function sendChatMessage(message, container, opts = {}) {
           } else if (/429|rate.?limit|限流/i.test(raw)) {
             msg = '⚠️ LLM 触发限流（429）\n\n请降低请求频率，或升级服务商配额。';
           }
-          appendChat(container, 'bot', msg);
+          const errSpan = appendChat(container, 'bot', msg);
+          errSpan.classList.add('md-body');
+          errSpan.innerHTML = renderMarkdown(msg);
           setChatStatus('出错');
         }
       }
     }
   } catch (e) {
-    if (thinking && thinking.parentNode) thinking.remove();
-    appendChat(container, 'bot', '❌ ' + e.message);
-    setChatStatus('网络错误');
+    removeThinking();
+    // 用户主动停止（AbortError）不算错误，不显示红字
+    if (e.name === 'AbortError') {
+      setChatStatus('⏹ 已停止');
+    } else {
+      const errSpan = appendChat(container, 'bot', '❌ ' + e.message);
+      errSpan.classList.add('md-body');
+      errSpan.innerHTML = renderMarkdown('❌ ' + e.message);
+      setChatStatus('网络错误');
+    }
   } finally {
     if (opts.onStop) opts.onStop.classList.add('hidden');
     if (typeof opts.onSettled === 'function') opts.onSettled();
@@ -1156,8 +1270,84 @@ $('#chatInput').addEventListener('keydown', (e) => {
 });
 $('#btnChatSend').addEventListener('click', sendChat);
 $('#btnChatClear').addEventListener('click', () => clearChat());
+
+// ===== 消息操作（复制 / 重新生成）+ 代码块复制 —— 事件委托 =====
+function copyText(text, btn) {
+  const done = () => { if (btn) { const old = btn.textContent; btn.textContent = '✓ 已复制'; setTimeout(() => btn.textContent = old, 1500); } };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+  } else {
+    fallbackCopy(text, done);
+  }
+}
+function fallbackCopy(text, done) {
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); done(); } catch (_) {}
+  ta.remove();
+}
+// 取某条消息气泡的纯文本（代码块还原为 ``` 形式）
+function bubbleText(msgEl) {
+  const t = msgEl.querySelector('.msg-bubble .text');
+  if (!t) return '';
+  let out = '';
+  t.childNodes.forEach((n) => {
+    if (n.nodeType === 3) out += n.textContent;
+    else if (n.classList && n.classList.contains('code-block')) {
+      const pre = n.querySelector('pre code');
+      out += '\n```\n' + (pre ? pre.textContent : '') + '\n```\n';
+    } else if (n.nodeType === 1) out += n.textContent;
+  });
+  return out.trim();
+}
+$('#chatWindow').addEventListener('click', (e) => {
+  // 代码块复制
+  const cbBtn = e.target.closest('.cb-copy');
+  if (cbBtn) {
+    const pre = document.getElementById(cbBtn.dataset.copy);
+    copyText(pre ? pre.textContent : '', cbBtn);
+    return;
+  }
+  const op = e.target.closest('.msg-op');
+  if (!op) return;
+  const msgEl = op.closest('.chat-msg');
+  const textEl = msgEl && msgEl.querySelector('.msg-bubble .text');
+  if (op.dataset.op === 'copy' && textEl) {
+    copyText(bubbleText(msgEl), op);
+  } else if (op.dataset.op === 'regen') {
+    // 防重入 + 删除旧回答（避免"两个回答"）
+    if (chatSending) return;
+    let prev = msgEl.previousElementSibling;
+    while (prev && !prev.classList.contains('user')) prev = prev.previousElementSibling;
+    const userText = prev ? (prev.querySelector('.text') || {}).textContent : '';
+    if (!userText) return;
+    chatSending = true;
+    const sendBtn = $('#btnChatSend');
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.style.opacity = '0.5'; }
+    // 移除旧回答及其上方紧邻的 tool 转录条
+    let toRemove = msgEl;
+    let p = msgEl.previousElementSibling;
+    while (p && p.classList.contains('tool-step')) { toRemove = p; p = p.previousElementSibling; }
+    if (toRemove && toRemove.classList.contains('chat-msg')) toRemove.remove();
+    removeThinking();
+    sendChatMessage(userText, $('#chatWindow'), {
+      onStop: $('#btnChatStop'),
+      onSettled: () => {
+        chatSending = false;
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.style.opacity = ''; }
+      },
+    });
+  }
+});
+$('#btnChatClear').addEventListener('click', () => clearChat());
 $('#btnChatStop').addEventListener('click', () => {
-  if (chatAbort) { chatAbort.abort(); chatAbort = null; setChatStatus('⏹ 已停止'); }
+  if (chatAbort) {
+    chatAbort.abort();
+    chatAbort = null;
+    setChatStatus('⏹ 已停止');
+    removeThinking(); // 清理残留的 thinking 气泡
+  }
 });
 
 // ===== 联网搜索开关 =====

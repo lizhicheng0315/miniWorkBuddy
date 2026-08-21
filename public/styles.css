@@ -364,6 +364,64 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 }
 .chat-msg.thinking::after { content: '▎'; animation: blink 1s steps(2) infinite; }
 
+/* ===== Markdown 渲染（LobeChat 风格）===== */
+.msg-bubble .text.md-body { white-space: normal; display: block; }
+.md-body p { margin: 0 0 8px; }
+.md-body p:last-child { margin-bottom: 0; }
+.md-body .md-h { margin: 10px 0 6px; font-weight: 700; font-size: 15px; color: inherit; }
+.md-body .md-list { margin: 4px 0 8px; padding-left: 20px; }
+.md-body .md-list li { margin: 3px 0; }
+.md-body a { color: var(--accent-strong); text-decoration: underline; text-underline-offset: 2px; word-break: break-all; }
+.md-body strong { font-weight: 700; }
+.md-code {
+  background: rgba(37,99,235,0.08); color: #1d4ed8;
+  padding: 1px 6px; border-radius: 5px;
+  font-family: ui-monospace, Consolas, monospace; font-size: 13px;
+}
+
+/* 代码块 */
+.code-block {
+  margin: 8px 0; border-radius: 10px; overflow: hidden;
+  background: #0f172a; border: 1px solid #1e293b;
+}
+.cb-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 12px; background: #1e293b;
+}
+.cb-lang { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
+.cb-copy {
+  border: none; background: transparent; color: #cbd5e1;
+  font-size: 11px; cursor: pointer; padding: 2px 8px; border-radius: 5px;
+}
+.cb-copy:hover { background: rgba(255,255,255,0.12); color: #fff; }
+.code-block pre {
+  margin: 0; padding: 12px 14px; overflow-x: auto;
+  font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; line-height: 1.6;
+  color: #e2e8f0; white-space: pre;
+}
+.tok-kw { color: #93c5fd; font-weight: 600; }
+.tok-str { color: #86efac; }
+.tok-com { color: #64748b; font-style: italic; }
+.tok-num { color: #fca5a5; }
+
+/* 流式打字机光标 */
+.md-body.streaming::after {
+  content: '▍'; display: inline-block; margin-left: 1px;
+  animation: blink 0.9s steps(2) infinite; color: var(--accent);
+}
+
+/* 消息操作栏（复制/重新生成）*/
+.msg-ops {
+  display: flex; gap: 4px; margin-top: 6px;
+  opacity: 0; transition: opacity 0.15s;
+}
+.chat-msg:hover .msg-ops, .chat-msg:focus-within .msg-ops { opacity: 1; }
+.msg-op {
+  border: none; background: transparent; color: var(--muted);
+  font-size: 11px; cursor: pointer; padding: 2px 8px; border-radius: 8px;
+}
+.msg-op:hover { background: var(--accent-soft); color: var(--accent-strong); }
+
 /* 工具操作转录条（MiniCode transcript 灵魂） */
 .tool-step {
   display: flex; align-items: center; gap: 8px;
