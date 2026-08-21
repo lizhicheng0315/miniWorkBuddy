@@ -152,16 +152,15 @@ router.post('/chat/stream', requireAuth, async (req, res) => {
 
   try {
     write('thinking', { stage: 'classify' });
-    const result = await nlp.chat(req.user.id, message, { enableSearch: !!enableSearch });
+    // 真正的流式：把 LLM 的每个 token 增量直接写成 SSE delta 事件
+    // onStep 已实时推送工具转录，这里不再重复发送 result.steps
+    const result = await nlp.chat(req.user.id, message, {
+      enableSearch: !!enableSearch,
+      onDelta: (text) => write('delta', { text }),
+      onStep: (step) => write('tool', step),
+    });
     write('intent', { intent: result.intent, confidence: result.confidence, data: result.data });
-    // 流式输出 reply
-    const reply = result.reply || '';
-    const chunkSize = 8;
-    for (let i = 0; i < reply.length; i += chunkSize) {
-      write('delta', { text: reply.slice(i, i + chunkSize) });
-      await new Promise((r) => setTimeout(r, 12));
-    }
-    write('done', { reply });
+    write('done', { reply: result.reply });
   } catch (e) {
     write('error', { error: e.message });
   } finally {

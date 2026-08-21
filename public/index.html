@@ -183,6 +183,9 @@
               <div class="chat-sub" id="chatStatus">随时为你服务</div>
             </div>
             <div class="chat-head-actions">
+              <button id="btnVoiceToggle" class="ghost small toggle-btn" title="语音播报开关">
+                <span class="toggle-dot"></span> 语音
+              </button>
               <button id="btnWebSearchToggle" class="ghost small toggle-btn" title="联网搜索开关">
                 <span class="toggle-dot"></span> 联网
               </button>
@@ -207,10 +210,11 @@
           </div>
           <div class="chat-input">
             <div class="chat-input-wrap">
-              <textarea id="chatInput" rows="1" placeholder="输入消息，Enter 发送…"></textarea>
+              <button class="mic-btn" id="btnMic" title="语音输入">🎤</button>
+              <textarea id="chatInput" rows="1" placeholder="输入消息，或点 🎤 语音输入，Enter 发送…"></textarea>
               <button class="primary send" id="btnChatSend" title="发送">发送 ↑</button>
             </div>
-            <div class="chat-input-hint" id="chatHint">Enter 发送 · Shift+Enter 换行</div>
+            <div class="chat-input-hint" id="chatHint">Enter 发送 · Shift+Enter 换行 · 🎤 语音输入</div>
           </div>
         </div>
       </section>
@@ -259,11 +263,53 @@
               <button class="usage-range-btn" data-days="90">90天</button>
             </div>
           </div>
-          <div id="usageSummary" class="usage-summary">
-            <span class="muted">暂无用量数据</span>
+
+          <!-- 汇总指标 -->
+          <div id="usageSummary" class="usage-summary"></div>
+
+          <!-- 每日趋势 -->
+          <div class="usage-section">
+            <div class="usage-section-title">每日趋势</div>
+            <div id="usageChart" class="usage-chart"></div>
           </div>
-          <div id="usageByModel"></div>
-          <div id="usageChart" class="usage-chart"></div>
+
+          <!-- 模型分布 -->
+          <div class="usage-section">
+            <div class="usage-section-title">模型分布</div>
+            <div id="usageByModel" class="usage-models"></div>
+          </div>
+        </div>
+
+        <!-- 对接配置：飞书 / 企业微信 / 钉钉 -->
+        <div class="card">
+          <div class="row">
+            <h3>🔗 对接配置</h3>
+            <span class="muted">将提醒 / 日报推送到团队 IM</span>
+          </div>
+
+          <div id="integrationList" class="integration-list">
+            <div class="muted">加载中…</div>
+          </div>
+
+          <!-- 新增 / 编辑表单 -->
+          <form id="integrationForm" class="form integration-form" autocomplete="off">
+            <div class="grid">
+              <label>渠道
+                <select id="intChannel">
+                  <option value="feishu">飞书（自定义机器人，支持加签）</option>
+                  <option value="wecom">企业微信（群机器人 webhook）</option>
+                  <option value="dingtalk">钉钉（自定义机器人，需加签 secret）</option>
+                </select>
+              </label>
+              <label>名称 <input id="intName" placeholder="我的机器人" /></label>
+              <label>Webhook URL <input id="intWebhook" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxx" /></label>
+              <label id="intSecretWrap" class="hidden">加签 Secret <input id="intSecret" placeholder="可选（飞书/钉钉加签时填）" /></label>
+            </div>
+            <div class="actions">
+              <button class="primary" id="btnIntSave">保存渠道</button>
+              <span class="muted" id="intStatus"></span>
+            </div>
+          </form>
         </div>
 
         <!-- 备份与恢复 -->
@@ -286,8 +332,8 @@
       </section>
     </main>
 
-    <script defer src="app.js?v=11"></script>
-    <link rel="stylesheet" href="styles.css?v=3" />
+    <script defer src="app.js?v=19"></script>
+    <link rel="stylesheet" href="styles.css?v=12" />
     <script>
       // ?nosw=1 临时禁用 Service Worker（用于诊断缓存问题）
       if (!location.search.includes('nosw=1') && 'serviceWorker' in navigator) {

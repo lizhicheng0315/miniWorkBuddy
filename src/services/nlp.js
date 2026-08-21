@@ -308,18 +308,14 @@ function safeParseJson(text) {
 }
 
 async function classifyIntent(message, userId) {
-  // 优先离线规则：明确模式（高置信度）直接命中，稳定且省 LLM 调用
-  const offlineHit = offlineClassify(message);
-  if (offlineHit && offlineHit.confidence >= 0.85) {
-    offlineHit.source = 'offline-fast';
-    return offlineHit;
-  }
-
   const cfg = llm.resolveConfig();
+
   if (!cfg.apiKey) {
     // LLM 未配置：直接走脱机匹配
     return offlineClassify(message) || { intent: 'unknown', confidence: 0, error: '未匹配到任何意图' };
   }
+
+  // 默认优先走 LLM 意图分类（本地规则仅在 LLM 不可用时兜底）
   try {
     const c = llm.getClient();
     if (!c) return offlineClassify(message) || { intent: 'unknown', confidence: 0, error: 'LLM 客户端不可用' };
@@ -355,26 +351,15 @@ async function classifyIntent(message, userId) {
       return parsed;
     }
 
-    // LLM 输出不合法 / 缺 confidence / 明确 unknown → 优先回退离线规则
-    // （离线规则能识别"提醒我买牛奶"这类明确模式，比 LLM 判 unknown 更可靠）
-    // 仅接受离线明确命中（>=0.85），不接受 0.5 的"默认当待办"猜测
-    const offline = offlineClassify(message);
-    if (offline && offline.confidence >= 0.85 && offline.intent !== 'unknown' && !offline.error) {
-      offline.fallback = 'offline-llm-unknown';
-      return offline;
-    }
-    if (intentOk && typeof parsed.confidence === 'number' && parsed.intent === 'unknown') {
-      // LLM 明确 unknown 且离线也无明确结果 → 接受 unknown（走"没太听懂"提示）
+    // LLM 返回合法但为 unknown（或格式轻微无效）→ 默认由 LLM 直接兜底闲聊，
+    // 不再猜测成 create_todo（用户已选择"默认走 LLM"）
+    if (intentOk && parsed.intent === 'unknown') {
       return parsed;
     }
-    // 格式无效且离线无明确命中 → 接受离线兜底（create_todo 0.5），避免"连不上"误报
-    if (offline && !offline.error) {
-      offline.fallback = 'offline-llm-invalid';
-      return offline;
-    }
-    return { intent: 'unknown', confidence: 0, error: 'LLM 返回格式无效' };
+    // 格式严重无效 → 让 LLM 兜底闲聊（chat），不报错
+    return { intent: 'unknown', confidence: 0, source: 'llm-unknown' };
   } catch (e) {
-    // LLM 调用失败：降级到关键词匹配
+    // LLM 调用失败（网络/API 错误）：降级到本地规则兜底
     logger.warn(`classifyIntent failed (${e.message}), falling back to offline classifier`);
     const offline = offlineClassify(message);
     if (offline) {
@@ -393,220 +378,240 @@ function refineTime(parsed, intent) {
 
 // ===== 分发执行 =====
 
-async function executeIntent(intent, userId, originalMessage) {
-  const result = { data: null, summary: '' };
-  const title = (intent.title || originalMessage).slice(0, 200);
-
-  switch (intent.intent) {
-    case 'create_todo': {
+/**
+ * 工具注册表（nanobot 灵魂：极简可扩展内核）
+ * 每个工具 = { description, handler(ctx) -> { summary, data, steps } }
+ *   ctx = { intent, userId, message }
+ *   steps = [{ icon, text }] 操作转录（MiniCode transcript 灵魂）
+ * 新增能力只需在这里加一项，无需改动分发逻辑。
+ */
+const TOOLS = {
+  create_todo: {
+    description: '添加待办',
+    async handler({ intent, userId, message }) {
+      const title = (intent.title || message).slice(0, 200);
       const row = db.insert('todos', {
         user_id: userId,
         title,
         priority: intent.priority === 'high' ? 1 : intent.priority === 'low' ? 3 : 2,
         status: 'open',
-        due_at: refineTime(parseTime(originalMessage)),
+        due_at: refineTime(parseTime(message)),
       });
-      result.data = row;
-      result.summary = `✅ 已添加待办：${title}`;
-      break;
-    }
-    case 'create_schedule': {
-      const parsed = parseTime(originalMessage);
-      if (!parsed) {
-        result.summary = '⚠️ 没听出具体时间，请告诉我什么时候（例：明天下午3点）';
-        break;
-      }
+      return { data: row, summary: `✅ 已添加待办：${title}`, steps: [{ icon: '✅', text: `已添加待办：${title}` }] };
+    },
+  },
+  create_schedule: {
+    description: '创建日程',
+    async handler({ intent, userId, message }) {
+      const title = (intent.title || message).slice(0, 200);
+      const parsed = parseTime(message);
+      if (!parsed) return { summary: '⚠️ 没听出具体时间，请告诉我什么时候（例：明天下午3点）' };
       const remindBeforeMin = 15;
       const row = db.insert('schedule_events', {
-        user_id: userId,
-        title,
-        start_at: parsed.time.toISOString(),
-        remind_before_min: remindBeforeMin,
-        fired: 0,
+        user_id: userId, title, start_at: parsed.time.toISOString(), remind_before_min: remindBeforeMin, fired: 0,
       });
-      result.summary = `📅 已创建日程：${title}（${parsed.time.toLocaleString()}，提前 ${remindBeforeMin} 分钟提醒）`;
-      break;
-    }
-    case 'create_reminder': {
-      // 先尝试 LLM 给的 cron；再尝试 chrono + cron 推断
+      return { data: row, summary: `📅 已创建日程：${title}（${parsed.time.toLocaleString()}，提前 ${remindBeforeMin} 分钟提醒）`, steps: [{ icon: '📅', text: `已创建日程：${title}` }] };
+    },
+  },
+  create_reminder: {
+    description: '创建重复提醒',
+    async handler({ intent, userId, message }) {
+      const title = (intent.title || message).slice(0, 200);
       let cron = intent.cron;
-      if (!cron) cron = inferCronFromMessage(originalMessage);
-      if (!cron || !scheduler.isValidCron(cron)) {
-        result.summary = '⚠️ 没听出重复规则，试试：每天 9:00 / 工作日 8:30 / 每周一 10:00';
-        break;
-      }
+      if (!cron) cron = inferCronFromMessage(message);
+      if (!cron || !scheduler.isValidCron(cron)) return { summary: '⚠️ 没听出重复规则，试试：每天 9:00 / 工作日 8:30 / 每周一 10:00' };
       const row = db.insert('reminders', {
         user_id: userId,
         title: title.replace(/^提醒我/, '').replace(/^每天.*提醒我/, '').trim() || '提醒',
-        cron,
-        message: title,
-        enabled: 1,
+        cron, message: title, enabled: 1,
       });
       scheduler.register(row);
-      result.summary = `⏰ 已创建提醒：${row.title}（cron: ${cron}）`;
-      break;
-    }
-    case 'query_todo': {
+      return { data: row, summary: `⏰ 已创建提醒：${row.title}（cron: ${cron}）`, steps: [{ icon: '⏰', text: `已创建提醒：${row.title}` }] };
+    },
+  },
+  query_todo: {
+    description: '查询待办',
+    async handler({ userId }) {
       const open = db.list('todos', (t) => t.status === 'open', userId);
-      result.data = open;
-      result.summary = open.length
+      const summary = open.length
         ? `你有 ${open.length} 个未完成待办：\n` + open.slice(0, 10).map((t, i) => `${i + 1}. ${t.title}${t.due_at ? `（截止 ${new Date(t.due_at).toLocaleDateString()}）` : ''}`).join('\n')
         : '🎉 当前没有未完成待办';
-      break;
-    }
-    case 'query_schedule': {
+      return { data: open, summary, steps: open.length ? [{ icon: '📋', text: `查询到 ${open.length} 个未完成待办` }] : [] };
+    },
+  },
+  query_schedule: {
+    description: '查询日程',
+    async handler({ userId }) {
       const now = new Date();
       const week = new Date(now.getTime() + 7 * 24 * 3600 * 1000);
       const events = db.list('schedule_events', (ev) => new Date(ev.start_at) >= now && new Date(ev.start_at) <= week, userId);
-      result.data = events;
-      result.summary = events.length
+      const summary = events.length
         ? `未来 7 天有 ${events.length} 个日程：\n` + events.slice(0, 10).map((e) => `• ${e.title} @ ${new Date(e.start_at).toLocaleString()}`).join('\n')
         : '未来 7 天没有日程';
-      break;
-    }
-    case 'query_reminder': {
+      return { data: events, summary, steps: events.length ? [{ icon: '📆', text: `查询到 ${events.length} 个未来日程` }] : [] };
+    },
+  },
+  query_reminder: {
+    description: '查询提醒',
+    async handler({ userId }) {
       const list = db.list('reminders', null, userId);
-      result.data = list;
-      result.summary = list.length
+      const summary = list.length
         ? `你有 ${list.length} 个提醒：\n` + list.map((r) => `• ${r.title} (${r.cron}) ${r.enabled ? '✅' : '⏸'}`).join('\n')
         : '还没有设置提醒';
-      break;
-    }
-    case 'complete_todo': {
-      const target = intent.title || originalMessage.replace(/(完成|做完了|done)/g, '').trim();
+      return { data: list, summary, steps: list.length ? [{ icon: '⏰', text: `查询到 ${list.length} 个提醒` }] : [] };
+    },
+  },
+  complete_todo: {
+    description: '完成待办',
+    async handler({ intent, userId, message }) {
+      const target = intent.title || message.replace(/(完成|做完了|done)/g, '').trim();
       const todos = db.list('todos', (t) => t.status === 'open', userId);
       const hit = findByTitle(todos, target);
-      if (!hit) { result.summary = `找不到"${target}"`; break; }
+      if (!hit) return { summary: `找不到"${target}"` };
       db.update('todos', hit.id, { status: 'done', completed_at: db.nowIso() }, userId);
-      result.summary = `✅ 已完成：${hit.title}`;
-      break;
-    }
-    case 'delete_todo': {
-      const target = intent.title || originalMessage.replace(/(删除|删掉|取消)/g, '').trim();
+      return { summary: `✅ 已完成：${hit.title}`, steps: [{ icon: '✅', text: `已完成待办：${hit.title}` }] };
+    },
+  },
+  delete_todo: {
+    description: '删除待办',
+    async handler({ intent, userId, message }) {
+      const target = intent.title || intent.target || message.replace(/(删除|删掉|取消)/g, '').trim();
       const todos = db.list('todos', null, userId);
-      const hit = findByTitle(todos, target);
-      if (!hit) { result.summary = `找不到"${target}"`; break; }
+      // 危险操作：严格匹配，绝不模糊兜底误删
+      const hit = findByTitle(todos, target, true);
+      if (!hit) return { summary: `找不到名为「${target}」的待办，未删除。可先说"查一下待办"确认名称`, steps: [] };
       db.remove('todos', hit.id, userId);
-      result.summary = `🗑 已删除：${hit.title}`;
-      break;
-    }
-    case 'update_todo': {
-      const target = intent.target || intent.title || originalMessage;
+      return { summary: `🗑 已删除：${hit.title}`, steps: [{ icon: '🗑', text: `已删除待办：${hit.title}` }] };
+    },
+  },
+  update_todo: {
+    description: '修改待办',
+    async handler({ intent, userId, message }) {
+      const target = intent.target || intent.title || message;
       const newVal = intent.new_value || '';
       const todos = db.list('todos', null, userId);
       const hit = findByTitle(todos, target);
-      if (!hit) { result.summary = `找不到"${target}"`; break; }
-      // 智能判断 newVal 是时间、优先级、还是新标题
+      if (!hit) return { summary: `找不到"${target}"` };
       const timeParsed = parseTime(newVal);
       const update = {};
-      if (timeParsed) {
-        update.due_at = timeParsed.time.toISOString();
-        result.summary = `📝 已将「${hit.title}」截止时间改为 ${timeParsed.time.toLocaleString()}`;
-      } else if (/(高|重要|紧急|high)/i.test(newVal)) {
-        update.priority = 1;
-        result.summary = `📝 已将「${hit.title}」优先级设为高`;
-      } else if (/(中|medium)/i.test(newVal)) {
-        update.priority = 2;
-        result.summary = `📝 已将「${hit.title}」优先级设为中`;
-      } else if (/(低|不急|low)/i.test(newVal)) {
-        update.priority = 3;
-        result.summary = `📝 已将「${hit.title}」优先级设为低`;
-      } else if (newVal) {
-        update.title = newVal;
-        result.summary = `📝 已将待办改为「${newVal}」`;
-      } else {
-        result.summary = '⚠️ 没听出要改成什么';
-        break;
-      }
+      let stepText = '';
+      if (timeParsed) { update.due_at = timeParsed.time.toISOString(); stepText = `截止时间改为 ${timeParsed.time.toLocaleString()}`; }
+      else if (/(高|重要|紧急|high)/i.test(newVal)) { update.priority = 1; stepText = '优先级设为高'; }
+      else if (/(中|medium)/i.test(newVal)) { update.priority = 2; stepText = '优先级设为中'; }
+      else if (/(低|不急|low)/i.test(newVal)) { update.priority = 3; stepText = '优先级设为低'; }
+      else if (newVal) { update.title = newVal; stepText = `标题改为「${newVal}」`; }
+      else return { summary: '⚠️ 没听出要改成什么' };
       db.update('todos', hit.id, update, userId);
-      break;
-    }
-    case 'update_schedule': {
-      const target = intent.target || intent.title || originalMessage;
+      return { summary: `📝 已将「${hit.title}」${stepText}`, steps: [{ icon: '📝', text: `已修改待办：${hit.title} → ${stepText}` }] };
+    },
+  },
+  update_schedule: {
+    description: '修改日程',
+    async handler({ intent, userId, message }) {
+      const target = intent.target || intent.title || message;
       const newVal = intent.new_value || '';
       const events = db.list('schedule_events', null, userId);
       const hit = findByTitle(events, target);
-      if (!hit) { result.summary = `找不到日程"${target}"`; break; }
+      if (!hit) return { summary: `找不到日程"${target}"` };
       const timeParsed = parseTime(newVal);
       if (timeParsed) {
         db.update('schedule_events', hit.id, { start_at: timeParsed.time.toISOString(), fired: 0 }, userId);
-        result.summary = `📅 已将「${hit.title}」改到 ${timeParsed.time.toLocaleString()}`;
+        return { summary: `📅 已将「${hit.title}」改到 ${timeParsed.time.toLocaleString()}`, steps: [{ icon: '📅', text: `已修改日程时间：${hit.title}` }] };
       } else if (newVal) {
         db.update('schedule_events', hit.id, { title: newVal }, userId);
-        result.summary = `📅 已将日程名改为「${newVal}」`;
-      } else {
-        result.summary = '⚠️ 没听出要改成什么';
+        return { summary: `📅 已将日程名改为「${newVal}」`, steps: [{ icon: '📅', text: `已修改日程名：${hit.title}` }] };
       }
-      break;
-    }
-    case 'update_reminder': {
-      const target = intent.target || intent.title || originalMessage;
+      return { summary: '⚠️ 没听出要改成什么' };
+    },
+  },
+  update_reminder: {
+    description: '修改提醒',
+    async handler({ intent, userId, message }) {
+      const target = intent.target || intent.title || message;
       const newVal = intent.new_value || '';
       const reminders = db.list('reminders', null, userId);
       const hit = findByTitle(reminders, target);
-      if (!hit) { result.summary = `找不到提醒"${target}"`; break; }
+      if (!hit) return { summary: `找不到提醒"${target}"` };
       const newCron = inferCronFromMessage(newVal) || (newVal && scheduler.isValidCron(newVal) ? newVal : null);
       if (newCron) {
         scheduler.unregister(hit.id);
         db.update('reminders', hit.id, { cron: newCron, enabled: 1 }, userId);
         const r2 = db.find('reminders', hit.id, userId);
         scheduler.register(r2);
-        result.summary = `⏰ 已将「${hit.title}」cron 改为 ${newCron}`;
-      } else {
-        result.summary = '⚠️ 没听出新的 cron';
+        return { summary: `⏰ 已将「${hit.title}」cron 改为 ${newCron}`, steps: [{ icon: '⏰', text: `已修改提醒：${hit.title}` }] };
       }
-      break;
-    }
-    case 'breakdown': {
-      const r = await ai.breakdown(intent.title || originalMessage);
+      return { summary: '⚠️ 没听出新的 cron' };
+    },
+  },
+  breakdown: {
+    description: '任务拆解',
+    async handler({ intent, userId, message }) {
+      const r = await ai.breakdown(intent.title || message);
       if (r.ok) {
         try {
           const obj = JSON.parse(r.text);
-          result.data = obj;
-          result.summary = `🧩 **${obj.summary || '任务拆解'}**\n\n` + (obj.steps || []).map((s, i) => `${i + 1}. ${s.step}（约 ${s.estimate_min} 分钟）`).join('\n');
-        } catch {
-          result.summary = r.text;
-        }
-      } else {
-        result.summary = '⚠️ ' + r.error;
+          const summary = `🧩 **${obj.summary || '任务拆解'}**\n\n` + (obj.steps || []).map((s, i) => `${i + 1}. ${s.step}（约 ${s.estimate_min} 分钟）`).join('\n');
+          return { data: obj, summary, steps: [{ icon: '🧩', text: '已生成任务拆解' }] };
+        } catch { return { summary: r.text }; }
       }
-      break;
-    }
-    case 'daily_report': {
-      const r = await ai.dailyReport(userId);
-      result.summary = r.ok ? r.text : '⚠️ ' + r.error;
-      break;
-    }
-    case 'weekly_report': {
-      const r = await ai.weeklyReport(userId);
-      result.summary = r.ok ? r.text : '⚠️ ' + r.error;
-      break;
-    }
-    case 'monthly_review': {
-      const r = await ai.monthlyReview(userId);
-      result.summary = r.ok ? r.text : '⚠️ ' + r.error;
-      break;
-    }
-    case 'summarize': {
-      const r = await ai.summarize(userId);
-      result.summary = r.ok ? r.text : '⚠️ ' + r.error;
-      break;
-    }
-    case 'web_search': {
-      const query = intent.query || intent.title || originalMessage.replace(/^(查|搜|查一查|查一下|搜一搜|搜一下|帮我查|帮我搜|搜索)\s*[:：]?\s*/, '').trim();
-      result.summary = await handleWebSearch(query, userId);
-      break;
-    }
-    default:
-      result.summary = intent.reply || '我能帮你管理待办、日程、提醒，或者聊聊天。试试：明天下午3点开会 / 提醒我买牛奶 / 今日日报';
+      return { summary: '⚠️ ' + r.error };
+    },
+  },
+  daily_report: {
+    description: '今日日报',
+    async handler({ userId }) { const r = await ai.dailyReport(userId); return { summary: r.ok ? r.text : '⚠️ ' + r.error, steps: r.ok ? [{ icon: '📊', text: '已生成今日日报' }] : [] }; },
+  },
+  weekly_report: {
+    description: '本周周报',
+    async handler({ userId }) { const r = await ai.weeklyReport(userId); return { summary: r.ok ? r.text : '⚠️ ' + r.error, steps: r.ok ? [{ icon: '📊', text: '已生成本周周报' }] : [] }; },
+  },
+  monthly_review: {
+    description: '月度复盘',
+    async handler({ userId }) { const r = await ai.monthlyReview(userId); return { summary: r.ok ? r.text : '⚠️ ' + r.error, steps: r.ok ? [{ icon: '📊', text: '已生成月度复盘' }] : [] }; },
+  },
+  summarize: {
+    description: '内容摘要',
+    async handler({ userId }) { const r = await ai.summarize(userId); return { summary: r.ok ? r.text : '⚠️ ' + r.error }; },
+  },
+  web_search: {
+    description: '联网搜索',
+    async handler({ intent, userId, message, onDelta }) {
+      const query = intent.query || intent.title || message.replace(/^(查|搜|查一查|查一下|搜一搜|搜一下|帮我查|帮我搜|搜索)\s*[:：]?\s*/, '').trim();
+      const summary = await handleWebSearch(query, userId, onDelta);
+      return { summary, steps: [{ icon: '🔍', text: `已联网搜索：${query}` }] };
+    },
+  },
+};
+
+/**
+ * 工具分发器：根据 intent 找到工具并执行（找不到则兜底）
+ */
+async function executeIntent(intent, userId, originalMessage, opts = {}) {
+  const tool = TOOLS[intent.intent];
+  if (!tool) {
+    return {
+      data: null,
+      summary: intent.reply || '我能帮你管理待办、日程、提醒，或者聊聊天。试试：明天下午3点开会 / 提醒我买牛奶 / 今日日报',
+      steps: [],
+    };
   }
-  return result;
+  try {
+    const r = await tool.handler({ intent, userId, message: originalMessage, onDelta: opts.onDelta });
+    // 实时推送操作转录（MiniCode transcript 灵魂）
+    if (opts.onStep && r.steps && r.steps.length) {
+      for (const s of r.steps) { try { opts.onStep(s); } catch (_) {} }
+    }
+    return r;
+  } catch (e) {
+    logger.error('tool failed:', intent.intent, e.message);
+    return { data: null, summary: '⚠️ 执行出错：' + e.message, steps: [] };
+  }
 }
 
 /**
  * 联网搜索：搜索 → 有 LLM key 时 LLM 汇总；无 key 时直接列结果
  */
-async function handleWebSearch(query, userId) {
+async function handleWebSearch(query, userId, onDelta) {
   if (!query) return '⚠️ 没听出要搜索什么';
   try {
     const websearch = require('./websearch');
@@ -617,10 +622,12 @@ async function handleWebSearch(query, userId) {
     // 构造结果文本
     const itemsText = r.results.map((it, i) => `${i + 1}. ${it.title}\n   ${it.snippet || ''}\n   ${it.url}`).join('\n');
 
-    // 有 LLM key → 让 LLM 汇总成可读回答
+    // 有 LLM key → 让 LLM 汇总成可读回答（流式）
     const cfg = llm.resolveConfig();
     if (cfg.apiKey) {
-      const resp = await llm.chat(
+      const prefix = `🔍 已联网查询「${query}」\n\n`;
+      if (onDelta) onDelta(prefix);
+      const resp = await llm.chatStream(
         [
           {
             role: 'system',
@@ -631,13 +638,16 @@ async function handleWebSearch(query, userId) {
           },
           { role: 'user', content: `问题：${query}\n\n搜索结果：\n${itemsText}` },
         ],
-        { temperature: 0.3, max_tokens: 600, userId, intent: 'web_search' }
+        { temperature: 0.3, max_tokens: 600, userId, intent: 'web_search' },
+        onDelta
       );
-      if (resp.ok) return `🔍 已联网查询「${query}」\n\n${resp.text}`;
+      if (resp.ok) return prefix + resp.text;
     }
 
     // 无 LLM：直接列结果
-    return `🔍 搜索「${query}」的结果（${r.results.length} 条）：\n\n${itemsText}`;
+    const plain = `🔍 搜索「${query}」的结果（${r.results.length} 条）：\n\n${itemsText}`;
+    if (onDelta) onDelta(plain);
+    return plain;
   } catch (e) {
     logger.warn('handleWebSearch failed:', e.message);
     return '⚠️ 联网搜索出错：' + e.message;
@@ -645,7 +655,7 @@ async function handleWebSearch(query, userId) {
 }
 
 // 模糊匹配 todo 标题
-function findByTitle(rows, target) {
+function findByTitle(rows, target, strict = false) {
   if (!target || !rows.length) return null;
   const t = target.toLowerCase();
   let best = null, bestScore = 0;
@@ -657,7 +667,9 @@ function findByTitle(rows, target) {
       if (score > bestScore) { best = r; bestScore = score; }
     }
   }
-  return best || rows[0]; // 兜底：第一个
+  // strict 模式：删除等危险操作不兜底，匹配不到就返回 null
+  if (strict) return best;
+  return best || rows[0]; // 非严格兜底：第一个
 }
 
 // 简单 cron 推断
@@ -679,9 +691,175 @@ function inferCronFromMessage(msg) {
   return null;
 }
 
+// ===== Agentic 工具循环（MiniCode 灵魂：tool loop）=====
+const AGENT_MAX_ROUNDS = 4;
+
+/** 生成给 LLM 的工具清单描述 */
+function toolCatalogFor(enableSearch) {
+  return Object.entries(TOOLS)
+    .filter(([name]) => name !== 'web_search' || enableSearch) // 搜索关闭时不暴露该工具
+    .map(([name, t]) => `- ${name}: ${t.description}`)
+    .join('\n');
+}
+
+/**
+ * Agent 决策 prompt：LLM 一次性输出完整计划（plan-then-execute，对弱模型更稳）
+ *   {"action":"final","reply":"..."}   ← 无需工具（问答/闲聊）
+ *   {"action":"plan","steps":[
+ *      {"tool":"create_todo","args":{"title":"写论文","priority":"high"}},
+ *      {"tool":"create_reminder","args":{"title":"每天提醒写论文","cron":"0 9 * * *"}}
+ *   ]}
+ */
+const AGENT_SYSTEM = `你是 WorkBuddy 本地智能助手的规划器。分析用户消息，只输出一个 JSON 对象（不要 Markdown 包裹、不要解释）。
+
+可用工具：
+{TOOLS}
+
+两种输出格式：
+
+A. 问答/闲聊/建议，不需要工具操作数据：
+{"action":"final","reply":"给用户的中文回复"}
+
+B. 用户要执行操作（可多个）：
+{"action":"plan","steps":[
+  {"tool":"工具名","args":{"参数":"值"}},
+  {"tool":"工具名","args":{"参数":"值"}}
+]}
+
+规则：
+1. steps 按用户提到的操作顺序排列；同一动作只出现一次
+2. args 从用户原话精确提取：title 取引号内或动词后的核心名词原文，禁止发明、禁止用代词（如"它"）
+3. 涉及实时信息/外部知识用 web_search，query=完整搜索词
+4. 纯知识问答/闲聊/建议用格式 A 直接回答，不要强行调用工具
+5. 只输出 JSON`;
+
+/**
+ * 解析 LLM 的 agent 计划 JSON
+ */
+function parseAgentDecision(text) {
+  const j = safeParseJson(text);
+  if (!j) return null;
+  if (j.action === 'final') return { action: 'final', reply: String(j.reply || '') };
+  if (j.action === 'plan' && Array.isArray(j.steps)) {
+    const steps = j.steps
+      .filter((s) => s && TOOLS[s.tool])
+      .slice(0, AGENT_MAX_ROUNDS)
+      .map((s) => ({ tool: s.tool, args: s.args || {} }));
+    if (steps.length) return { action: 'plan', steps };
+  }
+  return null;
+}
+
+/**
+ * Plan-then-Execute：
+ * LLM 一次输出完整计划 → 逐步执行每个工具 → 汇总结果
+ */
+async function runAgentLoop(userId, message, opts = {}) {
+  const enableSearch = !!opts.enableSearch;
+  const onDelta = (opts && typeof opts.onDelta === 'function') ? opts.onDelta : null;
+  const onStep = (opts && typeof opts.onStep === 'function') ? opts.onStep : null;
+
+  // 1. 让 LLM 出计划（非流式）
+  let raw;
+  try {
+    const c = llm.getClient();
+    if (!c) return null; // LLM 不可用 → 走旧路径
+    const resp = await c.chat.completions.create({
+      model: llm.resolveConfig().model,
+      messages: [
+        { role: 'system', content: AGENT_SYSTEM.replace('{TOOLS}', toolCatalogFor(enableSearch)) },
+        { role: 'user', content: message },
+      ],
+      temperature: 0.2,
+      max_tokens: 500,
+    });
+    raw = resp.choices?.[0]?.message?.content || '';
+    if (resp.usage && resp.usage.total_tokens) {
+      llm.recordUsage({
+        model: llm.resolveConfig().model,
+        prompt_tokens: resp.usage.prompt_tokens,
+        completion_tokens: resp.usage.completion_tokens,
+        total_tokens: resp.usage.total_tokens,
+        userId, intent: 'agent_plan',
+      });
+    }
+  } catch (e) {
+    logger.warn('agent plan failed:', e.message);
+    return null; // LLM 失败 → 走旧路径兜底
+  }
+
+  // 2. 解析计划
+  const decision = parseAgentDecision(raw);
+  if (!decision) {
+    // JSON 无效但 LLM 输出了文字 → 当 final 回复
+    if (raw && raw.trim().length > 2 && !raw.trim().startsWith('{')) {
+      const text = raw.trim();
+      if (onDelta) onDelta(text);
+      return { intent: 'agent', confidence: 1, reply: text, data: null, steps: [] };
+    }
+    return null; // 无法理解 → 走旧路径
+  }
+
+  // 3a. final：直接回答（闲聊路径）
+  if (decision.action === 'final') {
+    if (onDelta && decision.reply) onDelta(decision.reply);
+    return { intent: 'chat', confidence: 1, reply: decision.reply, data: null, steps: [] };
+  }
+
+  // 3b. plan：顺序执行每个步骤
+  const allSteps = [];
+  const results = [];
+  let lastIntent = 'agent';
+  for (const step of decision.steps) {
+    const fakeIntent = { intent: step.tool, ...step.args };
+    const exec = await executeToolSafe(step.tool, fakeIntent, userId, message, { onDelta, onStep });
+    allSteps.push(...(exec.steps || []));
+    lastIntent = step.tool;
+    results.push(`${step.tool}: ${exec.summary || 'done'}`.slice(0, 300));
+  }
+
+  // 4. 汇总最终回复
+  const summaryText = results.map((r) => `• ${r}`).join('\n');
+  const reply = `已完成 ${results.length} 个操作：\n${summaryText}`;
+  if (onDelta) onDelta(reply);
+  return { intent: lastIntent, confidence: 1, reply, data: null, steps: allSteps };
+}
+
+/** 安全执行单个工具（复用 TOOLS 注册表） */
+async function executeToolSafe(name, intent, userId, message, opts = {}) {
+  const tool = TOOLS[name];
+  if (!tool) return { summary: `未知工具 ${name}`, steps: [] };
+  try {
+    const r = await tool.handler({ intent, userId, message, onDelta: opts.onDelta });
+    if (opts.onStep && r.steps && r.steps.length) {
+      for (const s of r.steps) { try { opts.onStep(s); } catch (_) {} }
+    }
+    return r;
+  } catch (e) {
+    logger.error('agent tool failed:', name, e.message);
+    return { summary: `⚠️ ${name} 执行出错：${e.message}`, steps: [] };
+  }
+}
+
 // ===== 主入口 =====
 async function chat(userId, message, opts = {}) {
   const enableSearch = !!(opts && opts.enableSearch);
+  const onDelta = (opts && typeof opts.onDelta === 'function') ? opts.onDelta : null;
+
+  // ===== Agentic 路径（默认）：LLM 可用时走工具循环 =====
+  const cfg = llm.resolveConfig();
+  if (cfg.apiKey) {
+    const agentResult = await runAgentLoop(userId, message, { enableSearch, onDelta, onStep: opts.onStep });
+    if (agentResult) {
+      logger.info(`agent: "${message}" → ${agentResult.intent} (${(agentResult.steps || []).length} steps)`);
+      remember(userId, message, { intent: agentResult.intent });
+      return agentResult;
+    }
+    // agentResult === null → LLM 失败，降级到旧路径
+    logger.warn('agent loop unavailable, falling back to classify path');
+  }
+
+  // ===== 旧路径（降级保底）：分类 → 单工具执行 =====
   const intent = await classifyIntent(message, userId);
   logger.info(`nlp: "${message}" → ${intent.intent} (${intent.confidence}) search=${enableSearch}`);
 
@@ -690,6 +868,7 @@ async function chat(userId, message, opts = {}) {
 
   // classify 失败（LLM 错误）→ 友好提示
   if (intent.error) {
+    if (onDelta) onDelta('⚠️ 助手暂时连不上：' + intent.error);
     return {
       intent: 'error',
       confidence: 0,
@@ -698,43 +877,72 @@ async function chat(userId, message, opts = {}) {
     };
   }
 
-  if (intent.intent === 'unknown' || (typeof intent.confidence === 'number' && intent.confidence < 0.3)) {
-    return {
-      intent: 'unknown',
-      confidence: intent.confidence,
-      reply: '没太听懂，试试："明天下午3点开会"、"提醒我买牛奶"、"今天日报"、"我还有什么没做"',
-      data: null,
-    };
+  // LLM 判 unknown 或低置信度 → 交给 LLM 兜底闲聊（默认走 LLM 模式）
+  if (intent.intent === 'unknown') {
+    if (intent.error) {
+      // 本地兜底也无结果：仍然 LLM 闲聊兜底，但提示可操作命令
+      const reply = '⚠️ 本地规则未识别，但我会尽力回答。如果你要管理待办，可以说："明天下午3点开会"、"提醒我买牛奶"、"今日日报"。';
+      if (onDelta) onDelta(reply);
+      return { intent: 'unknown', confidence: intent.confidence || 0, reply, data: null };
+    }
+    // 正常 LLM unknown → 走 chat 兜底
+    intent.intent = 'chat';
   }
 
   // 联网搜索开关关闭时：web_search 意图降级为提示（直接返回，不重新生成）
   if (intent.intent === 'web_search' && !enableSearch) {
+    const reply = '🔌 联网搜索已关闭。点击对话右上角的「联网」开关，我就能帮你查实时信息了。\n\n（或者直接告诉我你想了解什么，我可以先聊聊）';
+    if (onDelta) onDelta(reply);
     return {
       intent: 'web_search_off',
       confidence: intent.confidence,
-      reply: '🔌 联网搜索已关闭。点击对话右上角的「联网」开关，我就能帮你查实时信息了。\n\n（或者直接告诉我你想了解什么，我可以先聊聊）',
+      reply,
       data: null,
     };
   }
 
+  if (intent.intent === 'web_search') {
+    const reply = await handleWebSearch(intent.query || intent.title || message, userId, onDelta);
+    return { intent: 'web_search', confidence: intent.confidence, reply, data: null };
+  }
+
   if (intent.intent === 'chat') {
-    // 直接 LLM 闲聊
+    // 直接 LLM 闲聊（流式）
+    const sys = '你是 WorkBuddy 本地智能助手。如果用户是在管理待办/日程/提醒，请用对应能力完成；如果是普通问题（知识/闲聊/建议），直接自然回答，不要生硬推送功能。中文、简洁友好。';
+    if (onDelta) {
+      const r = await llm.chatStream(
+        [
+          { role: 'system', content: sys },
+          { role: 'user', content: message },
+        ],
+        { temperature: 0.7, max_tokens: 400, userId, intent: 'chat' },
+        onDelta
+      );
+      return { intent: 'chat', confidence: 1, reply: r.ok ? r.text : '⚠️ ' + r.error, data: null };
+    }
+    // 无流式回调：走普通 chat
     const r = await llm.chat(
       [
-        { role: 'system', content: '你是 WorkBuddy 助手，简洁友好，100 字内回答。可用能力：待办 / 日程 / 提醒 / 今日摘要 / 日报 / 周报 / 月度复盘。' },
+        { role: 'system', content: sys },
         { role: 'user', content: message },
       ],
-      { temperature: 0.7, max_tokens: 300, userId, intent: 'chat' }
+      { temperature: 0.7, max_tokens: 400, userId, intent: 'chat' }
     );
     return { intent: 'chat', confidence: 1, reply: r.ok ? r.text : '⚠️ ' + r.error, data: null };
   }
 
-  const exec = await executeIntent(intent, userId, message);
+  const exec = await executeIntent(intent, userId, message, {
+    onDelta,
+    onStep: (opts && typeof opts.onStep === 'function') ? opts.onStep : null,
+  });
+  // 工具类操作没有流式 LLM 输出 → 把 summary 作为一次性 delta 发出，保证前端能渲染
+  if (onDelta && exec.summary && !exec._deltaSent) onDelta(exec.summary);
   return {
     intent: intent.intent,
     confidence: intent.confidence,
     reply: exec.summary,
     data: exec.data,
+    steps: exec.steps || [],
   };
 }
 

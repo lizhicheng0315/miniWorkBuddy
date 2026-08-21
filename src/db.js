@@ -130,6 +130,17 @@ function migrate() {
     CREATE INDEX IF NOT EXISTS idx_llm_usage_user_time ON llm_usage(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_llm_usage_model ON llm_usage(model);
 
+    CREATE TABLE IF NOT EXISTS integrations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel TEXT NOT NULL,                 -- feishu / wecom / dingtalk
+      name TEXT NOT NULL DEFAULT '',
+      enabled INTEGER NOT NULL DEFAULT 0,     -- 0/1
+      config TEXT NOT NULL DEFAULT '{}',      -- JSON: webhook / app_id / secret 等
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_integrations_channel ON integrations(channel);
+
     -- 给所有数据表加 user_id 列（如不存在），用于多用户隔离
   `);
 

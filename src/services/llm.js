@@ -250,10 +250,13 @@ async function chatStream(messages, opts, onDelta) {
       clearTimeout(timer);
       const status = e.status || e?.response?.status;
       const retryable = isRetryable(e);
-      if (retryable && status === 429 && attempt < MAX_RETRIES()) {
-        logger.warn(`LLM stream 429, waiting 10s before retry ${attempt + 1}/${MAX_RETRIES()}`);
-        try { onDelta('', full); onDelta('[限流，等待 10s 后重试…]', full); } catch (_) {}
-        await sleep(10_000);
+      if (retryable && attempt < MAX_RETRIES()) {
+        const is429 = status === 429;
+        const waitMs = is429 ? 10_000 : Math.min(BASE_DELAY_MS() * Math.pow(2, attempt), 15_000);
+        const reason = is429 ? '限流' : `上游错误 ${status || ''}`.trim();
+        logger.warn(`LLM stream ${reason}, waiting ${Math.round(waitMs / 1000)}s before retry ${attempt + 1}/${MAX_RETRIES()}`);
+        try { onDelta('', full); onDelta(`[${reason}，将在 ${Math.round(waitMs / 1000)}s 后重试…]`, full); } catch (_) {}
+        await sleep(waitMs);
         continue;
       }
       logger.error('LLM stream failed:', e.message);

@@ -596,50 +596,155 @@ async function refreshUsage() {
 }
 
 function renderUsage(u) {
-  // 汇总
   const sum = $('#usageSummary');
   if (!sum) return;
   const t = u.totals || {};
   const fmt = (n) => (n >= 1000000 ? (n / 1000000).toFixed(2) + 'M' : n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n));
-  sum.innerHTML = ''
-    + `<div class="usage-stat"><span class="num">${fmt(t.total_tokens || 0)}</span><span class="lbl">总 Token</span></div>`
-    + `<div class="usage-stat"><span class="num">${fmt(t.prompt_tokens || 0)}</span><span class="lbl">输入 Token</span></div>`
-    + `<div class="usage-stat"><span class="num">${fmt(t.completion_tokens || 0)}</span><span class="lbl">输出 Token</span></div>`
-    + `<div class="usage-stat"><span class="num">${t.calls || 0}</span><span class="lbl">调用次数</span></div>`
-    + `<div class="usage-stat"><span class="num">${t.models || 0}</span><span class="lbl">使用模型数</span></div>`;
+  const has = (t.total_tokens || 0) > 0;
 
-  // 按模型（横向条形）
+  if (!has) {
+    sum.innerHTML = '<div class="usage-empty">📭 近 ' + usageDays + ' 天暂无调用记录。<br>开始对话或生成报告后，这里会显示用量趋势。</div>';
+    $('#usageChart').innerHTML = '';
+    $('#usageByModel').innerHTML = '';
+    return;
+  }
+
+  // 汇总指标卡
+  sum.innerHTML = `
+    <div class="ustat">
+      <div class="ustat-ico" style="background:#eff6ff;color:#2563eb">∑</div>
+      <div class="ustat-body"><div class="ustat-num">${fmt(t.total_tokens)}</div><div class="ustat-lbl">总 Token</div></div>
+    </div>
+    <div class="ustat">
+      <div class="ustat-ico" style="background:#f0fdf4;color:#16a34a">↓</div>
+      <div class="ustat-body"><div class="ustat-num">${fmt(t.prompt_tokens)}</div><div class="ustat-lbl">输入</div></div>
+    </div>
+    <div class="ustat">
+      <div class="ustat-ico" style="background:#fef2f2;color:#dc2626">↑</div>
+      <div class="ustat-body"><div class="ustat-num">${fmt(t.completion_tokens)}</div><div class="ustat-lbl">输出</div></div>
+    </div>
+    <div class="ustat">
+      <div class="ustat-ico" style="background:#faf5ff;color:#9333ea">⚡</div>
+      <div class="ustat-body"><div class="ustat-num">${t.calls}</div><div class="ustat-lbl">调用次数</div></div>
+    </div>`;
+
+  // 模型分布（横向条 + 百分比）
   const bm = $('#usageByModel');
   if (bm) {
     const models = u.by_model || [];
-    if (models.length) {
-      const max = Math.max(...models.map((m) => m.total_tokens || 0));
-      bm.innerHTML = models.map((m) => `
-        <div class="usage-model">
-          <span class="mname">${escapeHtml(m.model)}</span>
-          <span class="mbar"><i style="width:${max ? Math.round((m.total_tokens / max) * 100) : 0}%"></i></span>
-          <span class="mval">${fmt(m.total_tokens)} tokens · ${m.calls} 次</span>
-        </div>`).join('');
-    } else {
-      bm.innerHTML = '';
-    }
-  }
-
-  // 按日期（柱状图）
-  const chart = $('#usageChart');
-  if (chart) {
-    const days = u.by_day || [];
-    if (!days.length) {
-      chart.innerHTML = '<span class="muted" style="margin:auto">近 ' + usageDays + ' 天无调用记录</span>';
-      return;
-    }
-    const maxV = Math.max(...days.map((d) => d.total_tokens || 0));
-    chart.innerHTML = days.slice().reverse().map((d) => {
-      const h = maxV ? Math.max(6, Math.round(((d.total_tokens || 0) / maxV) * 100)) : 6;
-      return `<div class="bar" style="height:${h}%" data-date="${escapeHtml(d.date)}" title="${escapeHtml(d.date)} · ${fmt(d.total_tokens)} tokens · ${d.calls}次"></div>`;
+    const total = models.reduce((s, m) => s + (m.total_tokens || 0), 0) || 1;
+    const max = Math.max(...models.map((m) => m.total_tokens || 0)) || 1;
+    bm.innerHTML = models.map((m) => {
+      const pct = Math.round(((m.total_tokens || 0) / total) * 100);
+      const w = Math.round(((m.total_tokens || 0) / max) * 100);
+      return `
+        <div class="umodel">
+          <span class="umname">${escapeHtml(m.model)}</span>
+          <span class="umbar"><i style="width:${w}%"></i></span>
+          <span class="umval">${fmt(m.total_tokens)} · ${pct}%</span>
+        </div>`;
     }).join('');
   }
+
+  // 每日趋势（平滑曲线面积图）
+  const chart = $('#usageChart');
+  if (chart) {
+    const days = (u.by_day || []).slice().reverse();
+    if (!days.length) {
+      chart.innerHTML = '<span class="muted" style="margin:auto">近 ' + usageDays + ' 天无调用记录</span>';
+    } else {
+      chart.innerHTML = renderLineChart(days, fmt);
+    }
+  }
 }
+
+/**
+ * 纯 SVG 平滑曲线面积图
+ * @param {Array<{date,tokens,total_tokens,calls}>} days 升序
+ */
+function renderLineChart(days, fmt) {
+  const W = 600, H = 140, PAD = 14;
+  const n = days.length;
+  const maxV = Math.max(...days.map((d) => d.total_tokens || 0)) || 1;
+  const minV = 0;
+  const x = (i) => PAD + (i * (W - 2 * PAD)) / Math.max(1, n - 1);
+  const y = (v) => H - PAD - ((v - minV) / (maxV - minV)) * (H - 2 * PAD);
+
+  const pts = days.map((d, i) => [x(i), y(d.total_tokens || 0)]);
+  // 平滑曲线（Catmull-Rom → 三次贝塞尔）
+  const linePath = smoothPath(pts);
+  const areaPath = linePath + ` L ${x(n - 1)},${H - PAD} L ${x(0)},${H - PAD} Z`;
+
+  const dots = pts.map(([px, py], i) => {
+    const d = days[i];
+    const tip = `${escapeHtml(d.date)} · ${fmt(d.total_tokens)} tokens · ${d.calls} 次`;
+    return `<circle class="u-dot" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3.5" data-tip="${tip}" />`;
+  }).join('');
+
+  // X 轴日期标签（最多显示 ~8 个避免拥挤）
+  const labelStep = Math.ceil(n / 8);
+  const labels = days.map((d, i) => {
+    if (i % labelStep !== 0 && i !== n - 1) return '';
+    const md = (d.date || '').slice(5); // MM-DD
+    return `<text x="${x(i).toFixed(1)}" y="${H - 2}" class="u-axis">${escapeHtml(md)}</text>`;
+  }).join('');
+
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="u-linechart" style="width:100%;height:${H}px">
+    <defs>
+      <linearGradient id="uArea" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.28"/>
+        <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.02"/>
+      </linearGradient>
+      <linearGradient id="uStroke" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stop-color="#2563eb"/>
+        <stop offset="100%" stop-color="#60a5fa"/>
+      </linearGradient>
+    </defs>
+    <path d="${areaPath}" fill="url(#uArea)" />
+    <path d="${linePath}" fill="none" stroke="url(#uStroke)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+    ${dots}
+    ${labels}
+  </svg>
+  <div id="uTip" class="u-tooltip"></div>`;
+}
+
+/** Catmull-Rom 转平滑贝塞尔路径 */
+function smoothPath(pts) {
+  if (pts.length < 2) return pts.length ? `M ${pts[0][0]},${pts[0][1]}` : '';
+  let d = `M ${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] || p2;
+    const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
+    const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
+    const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+    d += ` C ${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
+  }
+  return d;
+}
+
+// 曲线图 tooltip 交互（事件委托）
+document.addEventListener('mouseover', (e) => {
+  const dot = e.target.closest && e.target.closest('.u-dot');
+  if (!dot) return;
+  const tip = document.getElementById('uTip');
+  if (!tip) return;
+  tip.textContent = dot.dataset.tip;
+  tip.style.opacity = '1';
+  const svg = dot.ownerSVGElement;
+  const rect = svg.getBoundingClientRect();
+  tip.style.left = (dot.cx.baseVal.value / 600 * rect.width) + 'px';
+  tip.style.top = (dot.cy.baseVal.value / 140 * rect.height - 30) + 'px';
+});
+document.addEventListener('mouseout', (e) => {
+  if (e.target.closest && e.target.closest('.u-dot')) {
+    const tip = document.getElementById('uTip');
+    if (tip) tip.style.opacity = '0';
+  }
+});
 
 $$('.usage-range-btn').forEach((b) => {
   b.addEventListener('click', () => {
@@ -817,6 +922,22 @@ function nowTime() {
 }
 
 /**
+ * 工具操作转录条：显示助手"正在/已经执行了什么"
+ * @param {{icon?:string, text:string}} step
+ */
+function appendToolStep(container, step) {
+  const empty = container.querySelector('.chat-empty');
+  if (empty) empty.remove();
+  const el = document.createElement('div');
+  el.className = 'tool-step';
+  el.innerHTML = `<span class="ts-icon">${step.icon || '🔧'}</span><span class="ts-text"></span>`;
+  el.querySelector('.ts-text').textContent = step.text || '';
+  container.appendChild(el);
+  container.scrollTop = container.scrollHeight;
+  return el;
+}
+
+/**
  * 追加一条聊天消息（新蓝白气泡结构）
  * @returns 消息正文的 .text span（供流式更新）
  */
@@ -883,13 +1004,32 @@ function bindChips() {
   });
 }
 
+let chatSending = false; // 防重入锁：避免双击/回车连击导致重复提问
 function sendChat() {
+  if (chatSending) return; // 正在回复中，忽略重复提交
   const inp = $('#chatInput');
   const v = inp ? inp.value.trim() : '';
   if (!v) return;
+  chatSending = true;
+  const sendBtn = $('#btnChatSend');
+  if (sendBtn) { sendBtn.disabled = true; sendBtn.style.opacity = '0.5'; }
   inp.value = '';
   autoResizeInput();
-  sendChatMessage(v, $('#chatWindow'), { onStop: $('#btnChatStop') });
+  sendChatMessage(v, $('#chatWindow'), {
+    onStop: $('#btnChatStop'),
+    onSettled: () => {
+      chatSending = false;
+      if (sendBtn) { sendBtn.disabled = false; sendBtn.style.opacity = ''; }
+      const inp2 = $('#chatInput');
+      if (inp2 && currentTabVisible('chat')) inp2.focus();
+    },
+  });
+}
+
+// 判断某个面板是否当前可见
+function currentTabVisible(tabName) {
+  const panel = document.getElementById('panel-' + tabName);
+  return panel && panel.classList.contains('active');
 }
 
 function autoResizeInput() {
@@ -942,6 +1082,11 @@ async function sendChatMessage(message, container, opts = {}) {
         if (event === 'thinking') {
           // thinking 就是 appendChat 返回的 .text span
           thinking.textContent = '正在生成回复…';
+        } else if (event === 'tool') {
+          // 工具操作转录（MiniCode transcript）：显示助手执行了什么
+          if (thinking.parentNode) thinking.remove();
+          appendToolStep(container, payload);
+          setChatStatus('🔧 ' + (payload.text || '执行操作…'));
         } else if (event === 'intent') {
           intent = payload.intent;
           setChatStatus(`意图识别: ${intent}`);
@@ -954,10 +1099,37 @@ async function sendChatMessage(message, container, opts = {}) {
           botTextEl.textContent = fullText;
           container.scrollTop = container.scrollHeight;
         } else if (event === 'done') {
+          // 收尾：确保 thinking 被移除
+          if (thinking.parentNode) thinking.remove();
+          // 兜底：某些路径没有 delta（如纯工具执行），用 done.reply 渲染
+          if (!fullText.trim() && payload.reply) {
+            if (!botTextEl) {
+              botTextEl = appendChat(container, 'bot', '', intent);
+            }
+            fullText = payload.reply;
+            botTextEl.textContent = fullText;
+            container.scrollTop = container.scrollHeight;
+          }
+          // 清理：如果 bot 气泡仍是空的（异常情况），移除避免"空气泡"
+          if (botTextEl && !fullText.trim()) {
+            const bubble = botTextEl.closest('.chat-msg');
+            if (bubble) bubble.remove();
+            botTextEl = null;
+          }
           setChatStatus('已回复 ✓');
+          if (voiceEnabled() && fullText.trim()) speakText(fullText.trim());
         } else if (event === 'error') {
           if (thinking.parentNode) thinking.remove();
-          appendChat(container, 'bot', '❌ ' + (payload.error || '出错了'));
+          const raw = payload.error || '出错了';
+          let msg = '❌ ' + raw;
+          if (/503|Endpoint is unavailable|server_error|upstream/i.test(raw)) {
+            msg = '⚠️ LLM 上游暂时不可用（503）\n\n可能是：模型端点未部署 / 服务商限流 / 临时故障。\n建议：① 稍后重试 ② 在「LLM 配置」里换一个模型或 Base URL ③ 检查额度是否用完。';
+          } else if (/401|403|unauthorized|api.?key/i.test(raw)) {
+            msg = '⚠️ LLM 鉴权失败（401/403）\n\n请到「LLM 配置」检查 API Key 与 Base URL 是否正确。';
+          } else if (/429|rate.?limit|限流/i.test(raw)) {
+            msg = '⚠️ LLM 触发限流（429）\n\n请降低请求频率，或升级服务商配额。';
+          }
+          appendChat(container, 'bot', msg);
           setChatStatus('出错');
         }
       }
@@ -968,6 +1140,7 @@ async function sendChatMessage(message, container, opts = {}) {
     setChatStatus('网络错误');
   } finally {
     if (opts.onStop) opts.onStop.classList.add('hidden');
+    if (typeof opts.onSettled === 'function') opts.onSettled();
   }
 }
 
@@ -975,6 +1148,8 @@ async function sendChatMessage(message, container, opts = {}) {
 $('#chatInput').addEventListener('input', autoResizeInput);
 $('#chatInput').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
+    // 中文输入法确认候选词时也是 Enter，不能当成"发送"
+    if (e.isComposing || e.keyCode === 229) return;
     e.preventDefault();
     sendChat();
   }
@@ -1004,6 +1179,116 @@ $('#btnWebSearchToggle').addEventListener('click', () => {
 });
 renderWebSearchToggle();
 
+// ===== 语音模式（TTS 播报 + STT 语音输入）=====
+const VOICE_KEY = 'workbuddy_voice';
+function voiceEnabled() { return localStorage.getItem(VOICE_KEY) === '1'; }
+function renderVoiceToggle() {
+  const btn = $('#btnVoiceToggle');
+  if (!btn) return;
+  btn.classList.toggle('on', voiceEnabled());
+  btn.title = voiceEnabled() ? '语音播报已开启' : '语音播报已关闭';
+}
+$('#btnVoiceToggle').addEventListener('click', () => {
+  const on = !voiceEnabled();
+  localStorage.setItem(VOICE_KEY, on ? '1' : '0');
+  renderVoiceToggle();
+  setChatStatus(on ? '🔊 语音播报已开启' : '🔇 语音播报已关闭');
+  if (on) speakText('语音播报已开启');
+});
+renderVoiceToggle();
+
+// ---- TTS：朗读文本 ----
+let speechSynth = ('speechSynthesis' in window) ? window.speechSynthesis : null;
+let zhVoice = null;
+function pickVoice() {
+  if (!speechSynth) return;
+  const voices = speechSynth.getVoices();
+  zhVoice = voices.find(v => /zh|cmn|Chinese/i.test(v.lang + v.name)) || null;
+}
+if (speechSynth) {
+  pickVoice();
+  speechSynth.onvoiceschanged = pickVoice;
+}
+function speakText(text) {
+  if (!speechSynth || !voiceEnabled()) return;
+  speechSynth.cancel(); // 打断上一条
+  const u = new SpeechSynthesisUtterance(text.slice(0, 500)); // 限制长度避免过长
+  if (zhVoice) u.voice = zhVoice;
+  u.lang = 'zh-CN';
+  u.rate = 1.05;
+  u.pitch = 1;
+  speechSynth.speak(u);
+}
+
+// ---- STT：语音输入 ----
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+let micRecognition = null;
+let micRecording = false;
+function setupMic() {
+  if (!SR) {
+    const mic = $('#btnMic');
+    if (mic) { mic.disabled = true; mic.title = '当前浏览器不支持语音输入（推荐 Chrome）'; }
+    return;
+  }
+  micRecognition = new SR();
+  micRecognition.lang = 'zh-CN';
+  micRecognition.continuous = false;
+  micRecognition.interimResults = true;
+  micRecognition.onresult = (ev) => {
+    let interim = '';
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      const res = ev.results[i];
+      if (res.isFinal) {
+        const txt = res[0].transcript.trim();
+        if (txt) {
+          const inp = $('#chatInput');
+          inp.value = (inp.value + ' ' + txt).trim();
+          autoResizeInput();
+        }
+      } else {
+        interim = ev.results[i][0].transcript;
+      }
+    }
+    setChatStatus(interim ? '🎤 ' + interim : '聆听中…');
+  };
+  micRecognition.onerror = (e) => {
+    setChatStatus('语音识别错误: ' + e.error);
+    stopMic();
+  };
+  micRecognition.onend = () => stopMic();
+}
+function startMic() {
+  if (!micRecognition) return;
+  try {
+    micRecognition.start();
+    micRecording = true;
+    $('#btnMic').classList.add('recording');
+    $('#chatInput').closest('.chat-input').classList.add('recording-hint');
+    setChatStatus('🎤 聆听中，请说话…');
+  } catch (_) { /* 已在录音 */ }
+}
+function stopMic() {
+  micRecording = false;
+  const mic = $('#btnMic');
+  if (mic) mic.classList.remove('recording');
+  const ci = $('#chatInput') && $('#chatInput').closest('.chat-input');
+  if (ci) ci.classList.remove('recording-hint');
+  if (micRecording === false && micRecognition) {
+    try { micRecognition.stop(); } catch (_) {}
+  }
+}
+$('#btnMic').addEventListener('click', () => {
+  if (!SR) { alert('当前浏览器不支持语音输入，请使用 Chrome / Edge'); return; }
+  if (micRecording) {
+    // 再次点击：结束并发送
+    stopMic();
+    sendChat();
+  } else {
+    startMic();
+  }
+});
+if (SR) setupMic();
+
 bindChips();
 
 // 切到 chat tab 时聚焦输入框
@@ -1012,3 +1297,90 @@ $$('.tab').forEach((btn) => {
     if (btn.dataset.tab === 'chat') setTimeout(() => $('#chatInput').focus(), 50);
   });
 });
+
+// ===== 对接配置（飞书 / 企业微信 / 钉钉）=====
+const CHANNEL_META = {
+  feishu: { label: '飞书', icon: '🐦' },
+  wecom: { label: '企业微信', icon: '💬' },
+  dingtalk: { label: '钉钉', icon: '📣' },
+};
+async function loadIntegrations() {
+  const root = $('#integrationList');
+  if (!root) return;
+  try {
+    const r = await api('/api/integrations');
+    if (!r.items.length) {
+      root.innerHTML = '<div class="muted">还没有配置任何渠道。在下方填写 webhook 即可推送提醒/日报到团队 IM。</div>';
+      return;
+    }
+    root.innerHTML = '';
+    for (const it of r.items) {
+      const meta = CHANNEL_META[it.channel] || { label: it.channel, icon: '🔌' };
+      const el = document.createElement('div');
+      el.className = 'integration-item';
+      el.innerHTML = `
+        <div class="ic-logo">${meta.icon}</div>
+        <div class="ic-body">
+          <div class="ic-name">${escapeHtml(it.name || meta.label)}</div>
+          <div class="ic-meta">${meta.label} · ${escapeHtml(it.webhook || '未配置 webhook')}</div>
+        </div>
+        <div class="ic-actions">
+          <button class="ghost small" data-test="${it.id}">测试</button>
+          <button class="ghost small" data-del="${it.id}">删除</button>
+          <label class="switch">
+            <input type="checkbox" data-toggle="${it.id}" ${it.enabled ? 'checked' : ''} />
+            <span class="slider"></span>
+          </label>
+        </div>`;
+      root.appendChild(el);
+    }
+    $$('#integrationList [data-toggle]').forEach(cb => cb.addEventListener('change', async (e) => {
+      await api('/api/integrations/' + e.target.dataset.toggle + '/enabled', { method: 'PATCH', body: { enabled: e.target.checked } });
+    }));
+    $$('#integrationList [data-test]').forEach(b => b.addEventListener('click', async (e) => {
+      b.textContent = '…';
+      const r = await api('/api/integrations/' + e.target.dataset.test + '/test', { method: 'POST' });
+      b.textContent = '测试';
+      alert(r.ok ? '✅ 推送成功！' : '❌ 失败：' + (r.error || '未知错误'));
+    }));
+    $$('#integrationList [data-del]').forEach(b => b.addEventListener('click', async (e) => {
+      if (!confirm('确定删除该渠道配置？')) return;
+      await api('/api/integrations/' + e.target.dataset.del, { method: 'DELETE' });
+      loadIntegrations();
+    }));
+  } catch (err) {
+    root.innerHTML = '<div class="muted">加载失败：' + (err.message || err) + '</div>';
+  }
+}
+$('#intChannel').addEventListener('change', (e) => {
+  // 钉钉需要 secret
+  $('#intSecretWrap').classList.toggle('hidden', e.target.value !== 'dingtalk');
+});
+$('#btnIntSave').addEventListener('click', async () => {
+  const body = {
+    channel: $('#intChannel').value,
+    name: $('#intName').value.trim(),
+    webhook: $('#intWebhook').value.trim(),
+    secret: $('#intSecret').value.trim(),
+  };
+  if (!body.webhook) { $('#intStatus').textContent = '请填写 Webhook URL'; return; }
+  const btn = $('#btnIntSave');
+  btn.disabled = true;
+  try {
+    await api('/api/integrations', { method: 'POST', body });
+    $('#intName').value = '';
+    $('#intWebhook').value = '';
+    $('#intSecret').value = '';
+    $('#intStatus').textContent = '✅ 已保存';
+    await loadIntegrations();
+  } catch (err) {
+    $('#intStatus').textContent = '❌ ' + (err.message || err);
+  } finally {
+    btn.disabled = false;
+  }
+});
+// 进入 LLM 配置页时刷新对接列表
+$$('.tab').forEach((btn) => {
+  btn.addEventListener('click', () => { if (btn.dataset.tab === 'ai') loadIntegrations(); });
+});
+loadIntegrations();
