@@ -2,12 +2,54 @@
 
 仿照 WorkBuddy 思路的个人本地助手，覆盖三件事：
 
-- **待办（Todos）**：增删改查、优先级、分类、截止时间、完成勾选
+- **待办（Todos）**：增删改查、优先级左色条、相对截止时间、快速添加条
 - **日程（Schedule）**：具体时间点事件，提前 N 分钟弹 Windows 通知
 - **每日定时提醒（Reminders）**：用 cron 表达式配置任意重复节奏
-- **智能能力**：通过 OpenAI 兼容 LLM（DeepSeek / Moonshot / 自部署均可）生成今日摘要、任务建议、**任务拆解**、今日日报、**本周周报**、**月度复盘**
+- **智能能力**：通过 OpenAI 兼容 LLM（DeepSeek / 通义千问 / Moonshot / 自部署均可）生成今日摘要、任务建议、**任务拆解**、今日日报、**本周周报**、**月度复盘**
 
 数据保存在本地 **SQLite** 文件（`./data/workbuddy.db`，通过 sql.js 纯 WASM 引擎），支持完整**备份 / 导入**。
+
+## ✨ 核心特性
+
+### 🤖 Agent 式对话（核心界面）
+- **自然语言管理一切**：「明天下午3点开周会」「提醒我买牛奶」「每天9点写日报」「把买牛奶标记完成」
+- **Plan-then-Execute Agent 循环**：复合任务一句话完成——「创建待办'写周报'并每天9点提醒我」自动拆成两步工具调用
+- **可插拔工具注册表**：20+ 内置工具（待办/日程/提醒/日报/PPT/搜索），新增能力只需在 `TOOLS` 注册表加一项
+- **真流式输出**：LLM token 级 SSE 增量 + 打字机光标 + 节流渲染（长回复不卡顿）
+- **可见工具转录**：助手每执行一步操作，聊天里实时显示 🔧 步骤条（MiniCode transcript 风格）
+
+### 🌐 联网搜索
+- 对话里说「查一下XX」「XX是什么」自动触发
+- 多引擎降级链：Bing API（可选 key）→ **Bing HTML**（cn.bing.com 国内免key直连）→ DuckDuckGo
+- 搜索结果由 LLM 汇总成带来源链接的回答
+- 对话右上角「联网」开关随时启停
+
+### 📊 PPT 助理（ppt-master 方法论）
+```
+你: 帮我做一份"Q3工作汇报"的PPT
+🤖 ⛔ 生成大纲等你确认 → ✏️ 「第2页改成…」「加一页讲XX」（LLM现场改写）
+你: 确认
+🤖 🎨 选主题：商务蓝/极简白/科技黑/活力橙
+你: 商务蓝
+🤖 🎉 原生 .pptx 导出 → 聊天内点击下载卡片获取文件
+```
+- 右侧 **16:9 实时预览面板**：主题色实时渲染、缩略图翻页
+- 中文数字页码识别：「第四页改为…」✅
+- 下载用 10 分钟一次性签名票据，无需暴露登录态
+
+### 🗣️ 语音模式
+- 🔊 语音播报：AI 回复自动 TTS 朗读（中文）
+- 🎤 语音输入：Web Speech API 听写，说完再点一次即发送
+
+### 💬 会话历史
+- 左栏会话列表：SQLite 持久化、首条消息自动命名、点击回放完整记录
+- 新建 / 删除 / 当前高亮，刷新页面恢复上次会话
+
+### 🔗 团队 IM 对接
+飞书 / 企业微信 / 钉钉 自定义机器人 webhook 推送（支持飞书/钉钉加签），配置页一键测试。
+
+### 📈 Token 用量统计
+按天/模型统计，指标卡 + SVG 平滑曲线图，数据落库可回溯。
 
 ## 🛠️ 技术栈
 
@@ -17,6 +59,7 @@
 - node-notifier（Windows 系统通知 + 提示音）
 - openai（OpenAI 兼容 LLM 客户端，自带指数退避重试 + 超时）
 - **sql.js**（SQLite WASM 引擎，零原生编译）
+- **pptxgenjs**（原生 .pptx 生成，纯 JS）
 - 原生 HTML/CSS/JS（无前端构建步骤）
 
 ## 🚀 快速开始
@@ -57,6 +100,7 @@ npm start
 | `LLM_API_KEY` | **必填** LLM 密钥 | — |
 | `LLM_MODEL` | 模型名 | `deepseek-chat` |
 | `NOTIFY_SOUND` | 是否播放系统提示音 | `true` |
+| `BING_SEARCH_KEY` | 可选：Bing Web Search API key（不配则用 Bing HTML/DuckDuckGo） | — |
 
 ### 接入其他 LLM
 
@@ -91,6 +135,33 @@ npm start
 | `POST` | `/api/ai/daily-report` | 今日日报 |
 | `POST` | `/api/ai/weekly-report` | 本周周报 |
 | `POST` | `/api/ai/monthly-review` | 月度复盘 |
+| `GET` | `/api/ai/usage?days=7` | Token 用量统计（admin） |
+| `POST` | `/api/ai/search`  body: `{query}` | 联网搜索 |
+| `POST` | `/api/ai/chat/stream` | SSE 流式对话（真 token 级增量） |
+
+### PPT 助理
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/ppt/draft` | 当前用户 PPT 草稿 |
+| `GET` | `/api/ppt/download/t/:ticket` | 票据下载 .pptx（10 分钟有效） |
+
+### 会话历史
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET / POST` | `/api/chathistory/sessions` | 会话列表 / 新建 |
+| `GET / POST` | `/api/chathistory/sessions/:id/messages` | 回放消息 / 追加消息 |
+| `PATCH / DELETE` | `/api/chathistory/sessions/:id` | 重命名 / 删除会话 |
+
+### 对接配置
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET / POST` | `/api/integrations` | 渠道列表（webhook 脱敏）/ 创建更新 |
+| `PATCH` | `/api/integrations/:id/enabled` | 启用/停用 |
+| `POST` | `/api/integrations/:id/test` | 测试推送 |
+| `DELETE` | `/api/integrations/:id` | 删除渠道 |
 
 ### 认证
 
@@ -159,32 +230,39 @@ dsh/
 ├── server.js                # 入口（async main 启动）
 ├── package.json
 ├── .env.example
-├── public/                  # 前端静态文件
+├── public/                  # 前端静态文件（无构建）
 │   ├── index.html
-│   ├── app.js
-│   └── styles.css
+│   ├── app.js               # 对话/待办/PPT预览/历史栏 全部交互
+│   ├── styles.css           # 蓝白主题
+│   └── sw.js                # PWA Service Worker
 ├── src/
 │   ├── config.js
-│   ├── db.js                # sql.js 数据层 + 备份快照
+│   ├── db.js                # sql.js 数据层 + 备份快照 + 迁移
 │   ├── logger.js
 │   ├── routes/
-│   │   ├── todos.js
-│   │   ├── schedule.js
-│   │   ├── reminders.js
-│   │   ├── ai.js
-│   │   └── backup.js
+│   │   ├── todos.js / schedule.js / reminders.js / backup.js
+│   │   ├── ai.js            # SSE 流式对话 + 用量统计
+│   │   ├── integrations.js  # 飞书/企微/钉钉对接配置
+│   │   ├── ppt.js           # 草稿查询 + 票据下载
+│   │   └── chathistory.js   # 会话历史 CRUD
 │   └── services/
-│       ├── notifier.js
-│       ├── scheduler.js
-│       ├── llm.js           # 带重试 + 超时的 LLM 客户端
-│       ├── ai.js            # LLM 业务逻辑
-│       └── backup.js        # 导入导出
+│       ├── notifier.js / scheduler.js / backup.js
+│       ├── llm.js           # 带重试+超时的 LLM 客户端（chat/chatStream/getClient）
+│       ├── ai.js            # LLM 业务逻辑（日报/周报/拆解…）
+│       ├── nlp.js           # TOOLS 工具注册表 + Agent Plan-then-Execute 循环
+│       ├── websearch.js     # Bing HTML → DuckDuckGo 多引擎降级搜索
+│       ├── ppt.js           # PPT 草稿状态机 + pptxgenjs 导出
+│       ├── integration.js   # IM webhook 推送（加签支持）
+│       └── chatstore.js     # 会话历史持久化
 ├── scripts/
-│   ├── smoke.js             # 端到端 API 测试
-│   └── test-retry.js        # LLM 重试单元测试
+│   ├── smoke.js             # 端到端 API 测试（12 场景）
+│   ├── test-agent.js        # Agent 工具循环 mock 测试
+│   ├── test-markdown.js     # Markdown 渲染 + XSS 防护测试（11 例）
+│   ├── test-ppt.js          # PPT 导出真实文件测试
+│   └── test-pageno.js       # 中文数字页码测试
 └── data/                    # 运行后自动创建
     ├── workbuddy.db
-    └── sql-wasm.wasm
+    └── ppt/                 # 生成的 PPTX 文件
 ```
 
 ## 🧪 测试
@@ -198,6 +276,18 @@ node scripts/test-retry.js
 
 # NLP 对话单测
 node scripts/test-nlp.js
+
+# Agent 工具循环（mock LLM 决策，验证多步工具调用）
+node scripts/test-agent.js
+
+# Markdown 渲染 + XSS 防护（11 例）
+node scripts/test-markdown.js
+
+# 中文数字页码识别（第三页→3）
+node scripts/test-pageno.js
+
+# PPT 真实导出（生成合法 .pptx 并校验 ZIP 头）
+node scripts/test-ppt.js
 ```
 
 ## 🤖 LLM Key 怎么获取
@@ -231,29 +321,20 @@ LLM_MODEL=deepseek-chat
 
 **3. 不配置 LLM**：脱机降级模式自动启用（关键词匹配）
 
-### 脱机降级（无 key 也能用）
+### 🧠 意图识别架构（默认 LLM 优先）
 
-- 默认开启
-- 支持：闲聊、增/改/查/删待办、查日程、查提醒、查询类 AI 能力
-- 不支持：复杂意图、日报 / 周报 / 月度复盘（需要 LLM）
-
-控制开关：`.env` 里 `NLP_OFFLINE_FALLBACK=false`
+- **LLM 已配置**：所有消息先走 LLM 分类/Agent 规划；本地正则规则仅在 LLM 调用失败时兜底
+- **LLM 未配置**：自动降级为本地关键词规则（增删改查待办/日程/提醒均可，无需任何 key）
+- Agent 判定 unknown → 直接由 LLM 闲聊兜底，不会生硬回复"没听懂"
 
 ### 🌐 联网搜索
 
 对话里直接说「查一下XX」「搜索XX」「XX是什么」即可触发联网搜索：
 
-- 默认用 **DuckDuckGo**（免费、无需 key）
-- 可选配 **Bing Web Search API**（`.env` 里 `BING_SEARCH_KEY=`），质量更好
+- 引擎降级链：**Bing API**（配 `BING_SEARCH_KEY` 时优先）→ **Bing HTML**（cn.bing.com，国内免 key 直连，默认主力）→ DuckDuckGo
 - 有 LLM key 时：搜索 → LLM 汇总成一段可读回答 + 来源链接
 - 无 LLM key 时：直接列出搜索结果标题/摘要/链接
-
-```bash
-# 可选：配 Bing（免费订阅）
-# https://www.microsoft.com/en-us/bing/apis/bing-web-search-api
-# .env 里加：
-# BING_SEARCH_KEY=你的key
-```
+- 对话右上角「联网」开关随时启停
 
 ## 🔐 多用户 & 安全
 
