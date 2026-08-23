@@ -1208,12 +1208,16 @@ async function sendChatMessage(message, container, opts = {}) {
       setCurrentSessionId(sessionId);
     } catch (_) {}
   }
+  let lastMsgId = 0;
   if (sessionId) {
-    fetch('/api/chathistory/sessions/' + sessionId + '/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
-      body: JSON.stringify({ role: 'user', content: message }),
-    }).catch(() => {});
+    try {
+      const r = await fetch('/api/chathistory/sessions/' + sessionId + '/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+        body: JSON.stringify({ role: 'user', content: message }),
+      });
+      if (r.ok) { const j = await r.json(); lastMsgId = j.msgId || 0; }
+    } catch (_) {}
     loadSessionList();
   }
 
@@ -1282,7 +1286,7 @@ async function sendChatMessage(message, container, opts = {}) {
             bubble.innerHTML = renderMarkdown(fullText);
             setChatStatus('已回复 ✓');
             if (voiceEnabled()) speakText(fullText.trim());
-            saveBotMessage(sessionId, fullText.trim());
+            saveBotMessage(sessionId, fullText.trim(), () => maybeSummarize(sessionId));
           } else {
             botEl.remove(); // 空回复：整个消息移除
             setChatStatus('已回复 ✓');
@@ -1642,14 +1646,40 @@ loadIntegrations();
 
 // ===== 左侧会话历史 =====
 const SESSION_KEY = 'workbuddy_session_id';
-/** 落库 bot 回复 */
-function saveBotMessage(sessionId, content) {
-  if (!sessionId || !content) return;
+const SUMMARIZE_THRESHOLD = 12; // 未压缩消息超过此数自动触发摘要压缩
+/** 落库 bot 回复；完成后回调（用于链式触发压缩检查） */
+function saveBotMessage(sessionId, content, onSaved) {
+  if (!sessionId || !content) { if (onSaved) onSaved(); return; }
   fetch('/api/chathistory/sessions/' + sessionId + '/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
     body: JSON.stringify({ role: 'bot', content }),
-  }).then(() => loadSessionList()).catch(() => {});
+  }).then(async (r) => {
+    if (onSaved) onSaved();
+    loadSessionList();
+    // 压缩检查：未压缩消息数 >= 阈值 → 后台静默触发摘要
+    try {
+      if (!r.ok) return;
+      const ctx = await api('/api/chathistory/sessions/' + sessionId + '/context');
+      const uncompressed = (ctx.messages || []).length;
+      if (uncompressed >= SUMMARIZE_THRESHOLD) {
+        setChatStatus('🧹 正在整理长期记忆…');
+        await api('/api/chathistory/sessions/' + sessionId + '/summarize', { method: 'POST', body: {} });
+        setChatStatus('已回复 ✓');
+      }
+    } catch (_) {}
+  }).catch(() => { if (onSaved) onSaved(); });
+}
+/**
+ * 压缩检查：未压缩消息数达到阈值时调用后端 summarize
+ */
+async function maybeSummarize(sessionId) {
+  try {
+    const ctx = await api('/api/chathistory/sessions/' + sessionId + '/context');
+    const uncompressed = (ctx.messages || []).length;
+    if (uncompressed < SUMMARIZE_THRESHOLD) return;
+    await api('/api/chathistory/sessions/' + sessionId + '/summarize', { method: 'POST', body: {} });
+  } catch (_) {}
 }
 function getCurrentSessionId() {
   const v = localStorage.getItem(SESSION_KEY);

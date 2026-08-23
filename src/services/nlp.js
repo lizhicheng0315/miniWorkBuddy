@@ -624,6 +624,24 @@ const TOOLS = {
   },
 
   // ===== PPT 助理（ppt-master 方法论：大纲⛔ → 设计⛔ → 生成）=====
+  ask_clarification: {
+    description: '向用户追问澄清（当需求有歧义、缺关键参数、多种理解都可能时使用）',
+    async handler({ intent, message }) {
+      const question = intent.question
+        || intent.clarification
+        || (() => {
+          const q = String(message || '').trim();
+          return q ? '关于「' + q.slice(0, 40) + '」：能补充一下具体要求吗？（例如范围、时间、格式）' : '';
+        })();
+      if (!question) question = '能补充一下具体要求吗？';
+      return {
+        summary: '❓ ' + question,
+        steps: [{ icon: '❓', text: '需要向你确认一些信息' }],
+        data: { clarification: true },
+      };
+    },
+  },
+
   ppt_outline: {
     description: '生成PPT大纲（等待用户确认）',
     async handler({ intent, userId }) {
@@ -915,7 +933,8 @@ const AGENT_SYSTEM = `你是 WorkBuddy 本地智能助手的规划器。分析�
 两种输出格式：
 
 A. 问答/闲聊/建议，不需要工具操作数据：
-{"action":"final","reply":"给用户的中文回复"}
+{"action":"final","reply":"用一句话说明回答方向（如：介绍上海的城市概况）"}
+注意：reply 只是方向提示，系统会据此生成完整流式回答；写简短即可
 
 B. 用户要执行操作（可多个）：
 {"action":"plan","steps":[
@@ -936,7 +955,8 @@ B. 用户要执行操作（可多个）：
    - "加一页讲XX/新增一页XX" → ppt_add_page，args: {"topic":"XX"}
    - "删掉第X页" → ppt_edit_page（用户意图删除时在 message 里说明即可）
    - "导出/下载 PPT" → ppt_generate
-6. 只输出 JSON`;
+6. 需求有歧义/缺关键参数/多种理解都可能时 → 调用 ask_clarification，args: {"question":"你的追问"}，一次只问一个最关键的问题。宁可问清楚也不要猜错后执行危险操作（如删除、生成大文件）
+7. 只输出 JSON`;
 
 /**
  * 解析 LLM 的 agent 计划 JSON
@@ -964,6 +984,36 @@ async function runAgentLoop(userId, message, opts = {}) {
   const onDelta = (opts && typeof opts.onDelta === 'function') ? opts.onDelta : null;
   const onStep = (opts && typeof opts.onStep === 'function') ? opts.onStep : null;
 
+  // 注入 PPT 草稿状态（规划器需要知道"是否存在进行中的草稿"才能正确路由 ppt_confirm）
+  let draftContext = '';
+  try {
+    const d = require('./ppt').getDraft(userId);
+    if (d) {
+      draftContext = `\n[当前状态] 用户有一个进行中的PPT草稿：《${d.title}》（${d.pages.length} 页，阶段：${d.stage}）。用户此时说"确认/可以/好的"就是在推进这个流程。`;
+    }
+  } catch (_) {}
+
+  // 确定性指令快通道：纯确认词直接走 ppt_confirm，不赌 LLM 路由
+  const trimmed = message.trim();
+  if (draftContext && /^(确认|确定|可以|好的?|ok|yes|继续)[。！!。\s]*$/i.test(trimmed)) {
+    logger.info('agent: fast-path confirm');
+    const r = await executeToolSafe('ppt_confirm', { intent: 'ppt_confirm' }, userId, message, { onDelta, onStep });
+    if (onDelta && r.summary) onDelta(r.summary);
+    return { intent: 'ppt_confirm', confidence: 1, reply: r.summary || '✅ 已确认', data: null, steps: r.steps || [] };
+  }
+  // 设计阶段选主题快通道：纯主题词直接走 ppt_theme
+  if (/^(商务蓝|极简白|科技黑|活力橙|[1-4])[。！!。\s]*$/.test(trimmed)) {
+    try {
+      const pd = require('./ppt').getDraft(userId);
+      if (pd && pd.stage === 'design_pending') {
+        logger.info('agent: fast-path theme');
+        const r = await executeToolSafe('ppt_theme', { intent: 'ppt_theme' }, userId, message, { onDelta, onStep });
+        if (onDelta && r.summary) onDelta(r.summary);
+        return { intent: 'ppt_theme', confidence: 1, reply: r.summary || '🎨 已应用主题', data: null, steps: r.steps || [] };
+      }
+    } catch (_) {}
+  }
+
   // 1. 让 LLM 出计划（非流式）
   let raw;
   try {
@@ -972,7 +1022,7 @@ async function runAgentLoop(userId, message, opts = {}) {
     const resp = await c.chat.completions.create({
       model: llm.resolveConfig().model,
       messages: [
-        { role: 'system', content: AGENT_SYSTEM.replace('{TOOLS}', toolCatalogFor(enableSearch)) },
+        { role: 'system', content: AGENT_SYSTEM.replace('{TOOLS}', toolCatalogFor(enableSearch)) + draftContext },
         { role: 'user', content: message },
       ],
       temperature: 0.2,
@@ -1005,10 +1055,26 @@ async function runAgentLoop(userId, message, opts = {}) {
     return null; // 无法理解 → 走旧路径
   }
 
-  // 3a. final：直接回答（闲聊路径）
+  // 3a. final：需要 LLM 回答的问答/闲聊 → 用 chatStream 真流式生成完整回答
+  //     （规划器的 reply 只是方向提示；把提示并入 user 消息让二段模型展开）
   if (decision.action === 'final') {
-    if (onDelta && decision.reply) onDelta(decision.reply);
-    return { intent: 'chat', confidence: 1, reply: decision.reply, data: null, steps: [] };
+    const planned = decision.reply || '';
+    try {
+      const r = await llm.chatStream(
+        [
+          { role: 'system', content: '你是 WorkBuddy 本地智能助手。中文、简洁友好、自然回答。' },
+          { role: 'user', content: planned && planned !== message ? `${message}\n\n（回答方向：${planned}）` : message },
+        ],
+        { temperature: 0.7, max_tokens: 400, userId, intent: 'chat' },
+        onDelta
+      );
+      const text = r.ok ? r.text : (planned || '⚠️ ' + r.error);
+      if (!r.ok && onDelta && text) onDelta(text);
+      return { intent: 'chat', confidence: 1, reply: text, data: null, steps: [] };
+    } catch (_) {
+      if (onDelta && planned) onDelta(planned);
+      return { intent: 'chat', confidence: 1, reply: planned, data: null, steps: [] };
+    }
   }
 
   // 3b. plan：顺序执行每个步骤
