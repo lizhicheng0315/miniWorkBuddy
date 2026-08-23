@@ -85,6 +85,8 @@ async function main() {
   app.use('/api/reminders', require('./src/routes/reminders'));
   app.use('/api/ai', require('./src/routes/ai'));
   app.use('/api/integrations', require('./src/routes/integrations'));
+  app.use('/api/ppt', require('./src/routes/ppt'));
+  app.use('/api/chathistory', require('./src/routes/chathistory'));
   app.use('/api/backup', require('./src/routes/backup'));
 
   // 可观测性端点（公开 + admin 专属混合在 stats 路由里）

@@ -214,6 +214,111 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
   min-height: 480px;
 }
 
+/* PPT 预览双栏布局：panel-chat 内 横向排布 chat-shell + ppt-preview */
+#panel-chat { display: flex; gap: 14px; align-items: stretch; }
+#panel-chat > .chat-shell { flex: 1; min-width: 0; }
+
+/* ===== 左侧会话历史栏 ===== */
+.chat-history {
+  width: 220px; flex-shrink: 0;
+  background: #fff; border: 1px solid var(--border); border-radius: 18px;
+  box-shadow: var(--shadow);
+  display: flex; flex-direction: column;
+  padding: 12px; gap: 10px;
+  overflow: hidden;
+}
+.new-chat-btn { width: 100%; border-radius: 10px; padding: 9px; font-size: 13.5px; }
+.session-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.session-item {
+  position: relative; cursor: pointer;
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 26px 8px 10px;
+  border-radius: 10px; border: 1px solid transparent;
+  transition: all 0.15s;
+}
+.session-item:hover { background: var(--accent-soft); }
+.session-item.active { background: var(--accent-soft); border-color: var(--accent); }
+.session-item .si-icon { font-size: 13px; flex-shrink: 0; }
+.session-item .si-title {
+  flex: 1; font-size: 12.5px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.session-item.active .si-title { font-weight: 600; color: var(--accent-strong); }
+.session-item .si-del {
+  position: absolute; right: 6px;
+  border: none; background: transparent; color: var(--muted);
+  font-size: 11px; cursor: pointer; opacity: 0; padding: 2px 5px; border-radius: 6px;
+}
+.session-item:hover .si-del { opacity: 1; }
+.session-item .si-del:hover { background: #fee2e2; color: var(--bad); }
+
+@media (max-width: 1200px) {
+  .chat-history { width: 180px; }
+}
+
+/* ===== PPT 实时预览侧栏 ===== */
+.ppt-preview {
+  width: 340px; flex-shrink: 0;
+  background: #fff; border: 1px solid var(--border); border-radius: 18px;
+  box-shadow: var(--shadow);
+  display: flex; flex-direction: column;
+  padding: 14px; gap: 10px;
+  overflow: hidden;
+}
+.ppt-preview.hidden { display: none; }
+.pv-head { display: flex; justify-content: space-between; align-items: center; }
+.pv-title { font-weight: 700; font-size: 14px; color: var(--text); }
+
+/* 幻灯片舞台（16:9） */
+.pv-stage-wrap { aspect-ratio: 16 / 9; width: 100%; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); box-shadow: 0 4px 14px rgba(0,0,0,0.08); }
+.pv-slide { position: relative; width: 100%; height: 100%; font-family: '微软雅黑', sans-serif; animation: pvIn 0.25s ease; }
+@keyframes pvIn { from { opacity: 0.4; } to { opacity: 1; } }
+.pv-slide .pv-titlebar {
+  position: absolute; top: 0; left: 0; right: 0; height: 15%;
+  display: flex; align-items: center; gap: 6px; padding: 0 8%;
+}
+.pv-slide .pv-titlebar i { width: 3px; height: 60%; border-radius: 2px; }
+.pv-slide .pv-titlebar b { font-size: clamp(11px, 1.6vw, 15px); }
+.pv-slide .pv-bullets {
+  position: absolute; top: 22%; left: 7%; right: 7%; bottom: 12%;
+  margin: 0; padding-left: 16px; list-style: disc;
+  display: flex; flex-direction: column; justify-content: flex-start; gap: 6px;
+}
+.pv-slide .pv-bullets li { font-size: clamp(9px, 1.2vw, 12.5px); line-height: 1.45; }
+.pv-slide .pv-accentline { position: absolute; left: 7%; bottom: 7%; width: 18%; height: 3px; border-radius: 2px; }
+.pv-slide .pv-pageno { position: absolute; right: 5%; bottom: 5%; font-size: 10px; }
+.pv-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--muted); font-size: 12px; }
+
+.pv-nav { display: flex; align-items: center; justify-content: center; gap: 14px; }
+.pv-page { font-size: 13px; color: var(--muted); min-width: 56px; text-align: center; }
+
+/* 缩略图条 */
+.pv-thumbs {
+  flex: 1; overflow-y: auto;
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
+  align-content: start;
+  padding-right: 2px;
+}
+.pv-thumb {
+  position: relative; cursor: pointer;
+  border: 1.5px solid var(--border); border-radius: 8px;
+  padding: 8px 8px 6px 26px; background: var(--bg);
+  transition: all 0.15s;
+}
+.pv-thumb:hover { border-color: var(--accent); }
+.pv-thumb.active { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 2px rgba(37,99,235,0.15); }
+.pvt-no {
+  position: absolute; left: 7px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; border-radius: 50%; color: #fff;
+  font-size: 9px; display: flex; align-items: center; justify-content: center;
+}
+.pvt-title { font-size: 11px; color: var(--text); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pv-tip { font-size: 11px; color: var(--muted); text-align: center; padding-top: 4px; border-top: 1px dashed var(--border); }
+
+@media (max-width: 1100px) {
+  .ppt-preview { width: 280px; }
+}
+
 /* 对话头部 */
 .chat-head {
   display: flex; align-items: center; gap: 12px;
@@ -426,6 +531,22 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 
 /* 错误态气泡 */
 .msg-bubble.is-error { border-color: #fecaca; background: #fef2f2; }
+
+/* PPT 下载卡片 */
+.ppt-download-card {
+  display: flex; align-items: center; gap: 12px;
+  margin: 10px 0; padding: 12px 16px;
+  background: linear-gradient(135deg, #eff6ff, #dbeafe);
+  border: 1px solid #bfdbfe; border-radius: 12px;
+  text-decoration: none !important; color: inherit;
+  transition: all 0.18s;
+}
+.ppt-download-card:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(37,99,235,0.15); border-color: var(--accent); }
+.ppt-download-card .pdc-icon { font-size: 26px; }
+.ppt-download-card .pdc-body { flex: 1; min-width: 0; }
+.ppt-download-card .pdc-title { display: block; font-weight: 700; color: #1d4ed8; font-size: 14px; }
+.ppt-download-card .pdc-sub { display: block; font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.ppt-download-card .pdc-arrow { font-size: 18px; color: #1d4ed8; }
 
 /* 时间戳淡化（NextChat: opacity 0.2） */
 .chat-msg .msg-meta { font-size: 11px; color: var(--muted); margin: 0 4px 2px; opacity: 0.55; }

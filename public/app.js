@@ -985,6 +985,17 @@ function renderMarkdown(src) {
       continue;
     }
     if (!line.trim()) { flushPara(); closeList(); continue; }
+    // PPT 下载链接（票据制）→ 可点击下载卡片
+    const dl = line.match(/^(⬇️ 点击下载：)(\/api\/ppt\/download\/t\/[0-9a-f]+)\s*$/);
+    if (dl) {
+      flushPara(); closeList();
+      const url = dl[2];
+      out.push(`<a class="ppt-download-card" href="${url}" download>`
+        + `<span class="pdc-icon">📊</span><span class="pdc-body"><span class="pdc-title">点击下载 PPTX</span>`
+        + `<span class="pdc-sub">原生 PowerPoint 文件 · 链接 10 分钟内有效</span></span>`
+        + `<span class="pdc-arrow">⬇</span></a>`);
+      continue;
+    }
     para.push(line);
   }
   flushPara(); closeList();
@@ -1188,8 +1199,28 @@ async function sendChatMessage(message, container, opts = {}) {
   const { el: botEl, bubble } = appendBotSkeleton(container, null);
   if (opts.onStop) opts.onStop.classList.remove('hidden');
 
+  // ===== 会话历史持久化：确保会话存在 + 落库用户消息 =====
+  let sessionId = getCurrentSessionId();
+  if (!sessionId) {
+    try {
+      const s = await api('/api/chathistory/sessions', { method: 'POST', body: {} });
+      sessionId = s.id;
+      setCurrentSessionId(sessionId);
+    } catch (_) {}
+  }
+  if (sessionId) {
+    fetch('/api/chathistory/sessions/' + sessionId + '/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+      body: JSON.stringify({ role: 'user', content: message }),
+    }).catch(() => {});
+    loadSessionList();
+  }
+
   let fullText = '';
   let streaming = false; // 是否已开始填充内容
+  let pendingRender = null; // 节流渲染定时器
+  const nearBottomRef = { v: true };
   chatAbort = new AbortController();
   try {
     const res = await fetch('/api/ai/chat/stream', {
@@ -1230,11 +1261,20 @@ async function sendChatMessage(message, container, opts = {}) {
         } else if (event === 'delta') {
           if (!streaming) { bubble.classList.remove('typing'); bubble.classList.add('md-body', 'streaming'); streaming = true; }
           fullText += payload.text || '';
-          // 仅当用户在底部附近才自动滚动（NextChat 行为：不打断用户回看）
+          // 节流渲染：delta 高频到达时全量 Markdown 解析会卡主线程（长大纲尤其明显）
+          // 只累积文本，~90ms 渲染一次；done 时做最终完整渲染
+          const now = performance.now();
           const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 140;
-          bubble.innerHTML = renderMarkdown(fullText);
-          if (nearBottom) container.scrollTop = container.scrollHeight;
+          if (!pendingRender) {
+            pendingRender = setTimeout(() => {
+              pendingRender = null;
+              bubble.innerHTML = renderMarkdown(fullText);
+              if (nearBottomRef.v) container.scrollTop = container.scrollHeight;
+            }, 90);
+          }
+          nearBottomRef.v = nearBottom;
         } else if (event === 'done') {
+          if (pendingRender) { clearTimeout(pendingRender); pendingRender = null; } // 取消挂起渲染，下面做最终渲染
           if (!fullText.trim() && payload.reply) fullText = payload.reply;
           if (fullText.trim()) {
             bubble.classList.remove('typing', 'streaming');
@@ -1242,6 +1282,7 @@ async function sendChatMessage(message, container, opts = {}) {
             bubble.innerHTML = renderMarkdown(fullText);
             setChatStatus('已回复 ✓');
             if (voiceEnabled()) speakText(fullText.trim());
+            saveBotMessage(sessionId, fullText.trim());
           } else {
             botEl.remove(); // 空回复：整个消息移除
             setChatStatus('已回复 ✓');
@@ -1264,6 +1305,7 @@ async function sendChatMessage(message, container, opts = {}) {
       }
     }
   } catch (e) {
+    if (pendingRender) { clearTimeout(pendingRender); pendingRender = null; }
     if (e.name === 'AbortError') {
       // 用户停止：有内容保留部分回答，没内容移除整条
       if (!fullText.trim()) botEl.remove();
@@ -1278,6 +1320,8 @@ async function sendChatMessage(message, container, opts = {}) {
   } finally {
     if (opts.onStop) opts.onStop.classList.add('hidden');
     if (typeof opts.onSettled === 'function') opts.onSettled();
+    // PPT 预览：对话结束后刷新草稿（ppt_* 工具可能已修改）
+    if (typeof refreshPptPreview === 'function') setTimeout(refreshPptPreview, 300);
   }
 }
 
@@ -1595,3 +1639,166 @@ $$('.tab').forEach((btn) => {
   btn.addEventListener('click', () => { if (btn.dataset.tab === 'ai') loadIntegrations(); });
 });
 loadIntegrations();
+
+// ===== 左侧会话历史 =====
+const SESSION_KEY = 'workbuddy_session_id';
+/** 落库 bot 回复 */
+function saveBotMessage(sessionId, content) {
+  if (!sessionId || !content) return;
+  fetch('/api/chathistory/sessions/' + sessionId + '/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+    body: JSON.stringify({ role: 'bot', content }),
+  }).then(() => loadSessionList()).catch(() => {});
+}
+function getCurrentSessionId() {
+  const v = localStorage.getItem(SESSION_KEY);
+  return v ? Number(v) : null;
+}
+function setCurrentSessionId(id) {
+  if (id) localStorage.setItem(SESSION_KEY, String(id));
+  else localStorage.removeItem(SESSION_KEY);
+  // 高亮列表当前项
+  $$('#sessionList .session-item').forEach((el) => {
+    el.classList.toggle('active', Number(el.dataset.id) === Number(id));
+  });
+}
+async function loadSessionList() {
+  const box = $('#sessionList');
+  if (!box) return;
+  try {
+    const r = await api('/api/chathistory/sessions');
+    if (!r.items.length) {
+      box.innerHTML = '<div class="muted" style="padding:8px;font-size:12px">还没有历史对话</div>';
+      return;
+    }
+    box.innerHTML = '';
+    for (const s of r.items) {
+      const el = document.createElement('div');
+      el.className = 'session-item' + (Number(s.id) === getCurrentSessionId() ? ' active' : '');
+      el.dataset.id = s.id;
+      el.innerHTML = `
+        <span class="si-icon">💬</span>
+        <span class="si-title">${escapeHtml(s.title || '新对话')}</span>
+        <button class="si-del" title="删除会话">✕</button>`;
+      // 点击主体 → 回放
+      el.querySelector('.si-title').parentElement.addEventListener('click', async (e) => {
+        if (e.target.classList.contains('si-del')) return;
+        await openSession(s.id, s.title);
+      });
+      el.querySelector('.si-del').addEventListener('click', async () => {
+        if (!confirm('删除这个对话？')) return;
+        await api('/api/chathistory/sessions/' + s.id, { method: 'DELETE' });
+        if (getCurrentSessionId() === s.id) {
+          setCurrentSessionId(null);
+          clearChat();
+        }
+        loadSessionList();
+      });
+      box.appendChild(el);
+    }
+  } catch (_) {
+    box.innerHTML = '<div class="muted" style="padding:8px">加载失败</div>';
+  }
+}
+/** 打开某个历史会话：回放消息到中间区 */
+async function openSession(sessionId, title) {
+  setCurrentSessionId(sessionId);
+  const win = $('#chatWindow');
+  win.innerHTML = '';
+  try {
+    const r = await api('/api/chathistory/sessions/' + sessionId + '/messages');
+    for (const m of r.items) {
+      if (m.role === 'user') {
+        appendChat(win, 'user', m.content);
+      } else {
+        const span = appendChat(win, 'bot', '', null);
+        span.classList.add('md-body');
+        span.innerHTML = renderMarkdown(m.content);
+      }
+    }
+    if (!r.items.length) clearChat();
+    setChatStatus(title ? '已打开：' + title : '已打开历史对话');
+    win.scrollTop = win.scrollHeight;
+  } catch (_) {
+    setChatStatus('打开失败');
+  }
+  loadSessionList();
+}
+$('#btnNewChat').addEventListener('click', () => {
+  setCurrentSessionId(null); // 下次发消息自动建新会话
+  clearChat();
+  setChatStatus('新对话');
+  $('#chatInput').focus();
+});
+loadSessionList();
+
+// ===== PPT 实时预览侧栏 =====
+const pvState = { draft: null, theme: null, page: 1 };
+function pvThemeColors() {
+  const t = pvState.theme || {};
+  return {
+    bg: '#' + (t.bg || 'FFFFFF'), title: '#' + (t.title || '1F3864'),
+    text: '#' + (t.text || '333333'), accent: '#' + (t.accent || '2563EB'),
+    sub: '#' + (t.sub || '5B7BB4'), light: '#' + (t.light || 'EAF1FB'),
+  };
+}
+/** 渲染当前页到主舞台（16:9 缩略模拟） */
+function pvRenderSlide() {
+  const d = pvState.draft;
+  const stage = $('#pvSlide');
+  if (!d || !d.pages.length) { stage.innerHTML = '<div class="pv-empty">暂无草稿</div>'; return; }
+  const p = d.pages[Math.min(pvState.page, d.pages.length) - 1] || d.pages[0];
+  const c = pvThemeColors();
+  stage.style.background = c.bg;
+  stage.innerHTML = `
+    <div class="pv-titlebar" style="background:${c.light}"><i style="background:${c.accent}"></i><b style="color:${c.title}">${escapeHtml(p.title)}</b></div>
+    <ul class="pv-bullets">${p.bullets.slice(0, 6).map((b) => `<li style="color:${c.text}">${escapeHtml(b)}</li>`).join('') || '<li style="color:' + c.sub + '">（空页）</li>'}</ul>
+    <div class="pv-accentline" style="background:${c.accent}"></div>
+    <span class="pv-pageno" style="color:${c.sub}">${p.no} / ${d.pages.length}</span>`;
+  $('#pvPage').textContent = `${p.no} / ${d.pages.length}`;
+}
+/** 渲染缩略图条 */
+function pvRenderThumbs() {
+  const d = pvState.draft;
+  const box = $('#pvThumbs');
+  if (!d) { box.innerHTML = ''; return; }
+  const c = pvThemeColors();
+  box.innerHTML = d.pages.map((p) => `
+    <div class="pv-thumb ${p.no === pvState.page ? 'active' : ''}" data-page="${p.no}" title="${escapeHtml(p.title)}">
+      <span class="pvt-no" style="background:${c.accent}">${p.no}</span>
+      <span class="pvt-title">${escapeHtml(p.title.slice(0, 10))}</span>
+    </div>`).join('');
+  $$('#pvThumbs .pv-thumb').forEach((t) => t.addEventListener('click', () => {
+    pvState.page = parseInt(t.dataset.page, 10);
+    pvRenderSlide(); pvRenderThumbs();
+  }));
+}
+/** 拉取草稿并刷新预览；有草稿展开，无则收起 */
+async function refreshPptPreview() {
+  try {
+    const r = await api('/api/ppt/draft');
+    pvState.draft = r.has ? r.draft : null;
+    pvState.theme = r.has ? r.theme : null;
+    if (r.has) {
+      if (pvState.page > pvState.draft.pages.length) pvState.page = pvState.draft.pages.length;
+      $('#pptPreview').classList.remove('hidden');
+      pvRenderSlide(); pvRenderThumbs();
+    } else {
+      $('#pptPreview').classList.add('hidden');
+    }
+  } catch (_) { /* 静默 */ }
+}
+$('#btnPvPrev').addEventListener('click', () => {
+  if (!pvState.draft) return;
+  pvState.page = Math.max(1, pvState.page - 1);
+  pvRenderSlide(); pvRenderThumbs();
+});
+$('#btnPvNext').addEventListener('click', () => {
+  if (!pvState.draft) return;
+  pvState.page = Math.min(pvState.draft.pages.length, pvState.page + 1);
+  pvRenderSlide(); pvRenderThumbs();
+});
+$('#btnPvClose').addEventListener('click', () => $('#pptPreview').classList.add('hidden'));
+// 页面加载时也检查一次（服务重启前有草稿的场景刷新后可见）
+refreshPptPreview();

@@ -114,6 +114,7 @@ async function callOnce(model, messages, opts) {
     const usage = resp.usage || {}; // { prompt_tokens, completion_tokens, total_tokens }
     return {
       text: resp.choices?.[0]?.message?.content || '',
+      finish_reason: resp.choices?.[0]?.finish_reason || null, // length=被截断
       usage: {
         prompt_tokens: usage.prompt_tokens || 0,
         completion_tokens: usage.completion_tokens || 0,
@@ -163,7 +164,7 @@ async function chat(messages, opts = {}) {
 
   for (let attempt = 0; attempt <= MAX_RETRIES(); attempt++) {
     try {
-      const { text, usage } = await callOnce(model, messages, opts);
+      const { text, usage, finish_reason } = await callOnce(model, messages, opts);
       if (attempt > 0) logger.info(`LLM recovered after ${attempt} retry`);
       // 记录 token 用量
       recordUsage({
@@ -174,7 +175,7 @@ async function chat(messages, opts = {}) {
         userId: opts.userId,
         intent: opts.intent,
       });
-      return { ok: true, text, attempts: attempt + 1, usage };
+      return { ok: true, text, finish_reason, attempts: attempt + 1, usage };
     } catch (e) {
       lastErr = e;
       const status = e.status || e?.response?.status;

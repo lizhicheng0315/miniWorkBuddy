@@ -385,6 +385,47 @@ function refineTime(parsed, intent) {
  *   steps = [{ icon, text }] 操作转录（MiniCode transcript 灵魂）
  * 新增能力只需在这里加一项，无需改动分发逻辑。
  */
+
+/**
+ * 从文本提取"第X页"的页码：支持阿拉伯数字与中文数字
+ *   第3页 / 第三页 / 第十二页 / 第 12 页 / 第123页
+ * @returns {number} 页码，未识别返回 0
+ */
+function extractPageNo(text) {
+  const s = String(text || '');
+  // 阿拉伯数字
+  const arabic = s.match(/第\s*(\d{1,3})\s*页/);
+  if (arabic) return parseInt(arabic[1], 10);
+  // 中文数字
+  const cn = s.match(/第\s*([零一二两三四五六七八九十百]+)\s*页/);
+  if (!cn) return 0;
+  const digits = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  const c = cn[1];
+  if (c === '十') return 10;
+  if (c === '百') return 100;
+  const tenIdx = c.indexOf('十');
+  const hundredIdx = c.indexOf('百');
+  if (hundredIdx >= 0) {
+    // 百位：X百[零Y / YZ]
+    let v = (digits[c[hundredIdx - 1]] || 1) * 100;
+    const rest = c.slice(hundredIdx + 1).replace(/^零/, ''); // 一百"零"一 → 去零后按个位读
+    if (rest) {
+      const t2 = rest.indexOf('十');
+      if (t2 >= 0) {
+        v += ((digits[rest[t2 - 1]] || 1) * 10) + (digits[rest[t2 + 1]] || 0);
+      } else {
+        v += digits[rest] || 0;
+      }
+    }
+    return v;
+  }
+  if (tenIdx >= 0) {
+    // 十位：X十[Y] 或 十Y
+    return (tenIdx > 0 ? (digits[c[tenIdx - 1]] || 1) * 10 : 10) + (digits[c[tenIdx + 1]] || 0);
+  }
+  return digits[c] != null ? digits[c] : 0;
+}
+
 const TOOLS = {
   create_todo: {
     description: '添加待办',
@@ -581,6 +622,162 @@ const TOOLS = {
       return { summary, steps: [{ icon: '🔍', text: `已联网搜索：${query}` }] };
     },
   },
+
+  // ===== PPT 助理（ppt-master 方法论：大纲⛔ → 设计⛔ → 生成）=====
+  ppt_outline: {
+    description: '生成PPT大纲（等待用户确认）',
+    async handler({ intent, userId }) {
+      const ppt = require('./ppt');
+      const topic = intent.topic || intent.title || '';
+      if (!topic) return { summary: '⚠️ 请告诉我要做什么主题的PPT' };
+      // LLM 结构化输出大纲
+      const prompt = `你是PPT策划师。为主题「${topic}」设计一份演示文稿大纲。
+只返回 JSON：{"title":"主标题","subtitle":"副标题","pages":[{"title":"页标题","bullets":["要点1","要点2","要点3"],"note":"演讲提示"}]}
+要求：8-10页；结构含背景/现状/分析/方案/计划/总结；每页3-4条精炼要点。`;
+      const r = await llm.chat(
+        [{ role: 'system', content: '你是专业的PPT策划师，只输出 JSON，不要任何解释和 Markdown 包裹。' }, { role: 'user', content: prompt }],
+        { temperature: 0.5, max_tokens: 3000, userId, intent: 'ppt_outline' }
+      );
+      if (!r.ok) return { summary: '⚠️ 大纲生成失败：' + r.error };
+      // 截断检测：finish_reason=length 说明 JSON 被腰斩
+      if (r.finish_reason === 'length') {
+        return { summary: '⚠️ 大纲太长被截断了，请重试一次；若反复出现请减少要求的页数' };
+      }
+      const parsed = safeParseJson(r.text);
+      if (!parsed || !Array.isArray(parsed.pages) || !parsed.pages.length) {
+        return { summary: '⚠️ 大纲格式异常，请重试' };
+      }
+      const draft = ppt.createOutline(userId, topic, parsed);
+      return {
+        summary: ppt.outlineToText(draft) +
+          '\n\n⛔ 请确认这份大纲：\n• 回复「确认」进入下一步\n• 或说「第X页改成…」「删掉第X页」「加一页讲XX」来调整',
+        data: draft,
+        steps: [{ icon: '📑', text: `已生成《${draft.title}》大纲（${draft.pages.length} 页）` }],
+      };
+    },
+  },
+  ppt_add_page: {
+    description: '往PPT草稿追加一页（"加一页讲XX"）',
+    async handler({ intent, userId, message }) {
+      const ppt = require('./ppt');
+      const d = ppt.getDraft(userId);
+      if (!d) return { summary: '⚠️ 当前没有PPT草稿' };
+      const topic = intent.topic || intent.title || message.replace(/^.*?(?:加一页|添加一页|新增一页)\s*(?:讲|关于)?\s*/, '').replace(/[。！？]$/, '').trim();
+      if (!topic) return { summary: '⚠️ 请说明新页面讲什么，例如"加一页讲风险预案"' };
+      // LLM 生成该页内容
+      const r = await llm.chat(
+        [
+          { role: 'system', content: '你是PPT策划师。为新页面生成内容。只返回 JSON：{"title":"页标题","bullets":["要点1","要点2","要点3"]}' },
+          { role: 'user', content: `整份PPT主题：《${d.title}》。已有页面：${d.pages.map((p) => p.title).join('、')}。\n请为「${topic}」设计一页（3-4条要点，不与已有页重复）。` },
+        ],
+        { temperature: 0.5, max_tokens: 400, userId, intent: 'ppt_add_page' }
+      );
+      if (!r.ok) return { summary: '⚠️ 生成失败：' + r.error };
+      const parsed = safeParseJson(r.text);
+      if (!parsed || !parsed.title) return { summary: '⚠️ 格式异常，请重试' };
+      const lastNo = d.pages.length;
+      const np = ppt.addPage(userId, lastNo, { title: parsed.title, bullets: parsed.bullets || [] });
+      return {
+        summary: `➕ 已在第 ${np.no} 页位置新增：「${np.title}」（现共 ${d.pages.length} 页）\n${np.bullets.map((b) => '   • ' + b).join('\n')}\n\n回复「确认」继续，或继续调整`,
+        steps: [{ icon: '➕', text: `已新增第 ${np.no} 页` }],
+      };
+    },
+  },
+  ppt_edit_page: {
+    description: '修改PPT草稿的某一页（支持"第X页改成…"/"展开讲讲"）',
+    async handler({ intent, userId, message }) {
+      const ppt = require('./ppt');
+      const d = ppt.getDraft(userId);
+      if (!d) return { summary: '⚠️ 当前没有PPT草稿，先说"帮我做一份XX的PPT"' };
+      const no = extractPageNo(message) || (intent.page_no | 0);
+      if (!no) return { summary: '⚠️ 请说明要改第几页，例如"第2页改成…"或"第二页…"' };
+      const page = d.pages.find((p) => p.no === no);
+      if (!page) return { summary: `⚠️ 没找到第${no}页（当前共 ${d.pages.length} 页）` };
+
+      // Agent args 带了明确新内容 → 直接替换；否则让 LLM 按用户要求改写本页
+      if (intent.new_title || intent.bullets) {
+        const updated = ppt.editPage(userId, no, { title: intent.new_title, bullets: intent.bullets });
+        return {
+          summary: `✏️ 已更新第 ${updated.no} 页：${updated.title}\n${updated.bullets.map((b) => '   • ' + b).join('\n')}\n\n回复「确认」继续，或继续调整其他页`,
+          steps: [{ icon: '✏️', text: `已修改第 ${updated.no} 页` }],
+        };
+      }
+
+      // LLM 改写：把用户原话 + 当前页内容交给 LLM 重写
+      const r = await llm.chat(
+        [
+          { role: 'system', content: '你是PPT内容编辑。根据用户的修改要求重写指定页。只返回 JSON：{"title":"新标题","bullets":["要点1","要点2",...]}。保持其他页无关。' },
+          { role: 'user', content: `页面当前内容：\n标题：${page.title}\n要点：${JSON.stringify(page.bullets)}\n\n用户要求：${message}\n\n请输出修改后的这一页。` },
+        ],
+        { temperature: 0.5, max_tokens: 600, userId, intent: 'ppt_edit_page' }
+      );
+      if (!r.ok) return { summary: '⚠️ 改写失败：' + r.error };
+      const parsed = safeParseJson(r.text);
+      if (!parsed || (!parsed.title && !Array.isArray(parsed.bullets))) {
+        return { summary: '⚠️ 改写格式异常，请换个说法重试' };
+      }
+      const updated = ppt.editPage(userId, no, { title: parsed.title, bullets: parsed.bullets });
+      return {
+        summary: `✏️ 已按你的要求更新第 ${no} 页：\n\n${updated.title}\n${updated.bullets.map((b) => '   • ' + b).join('\n')}\n\n回复「确认」继续生成，或继续调整`,
+        steps: [{ icon: '✏️', text: `已修改第 ${no} 页` }],
+      };
+    },
+  },
+  ppt_confirm: {
+    description: '确认当前阶段（大纲/设计）并推进',
+    async handler({ userId }) {
+      const ppt = require('./ppt');
+      const d = ppt.getDraft(userId);
+      if (!d) return { summary: '⚠️ 当前没有PPT草稿' };
+      if (d.stage === 'outline_pending') {
+        ppt.confirmOutline(userId);
+        return {
+          summary: '✅ 大纲已锁定！\n\n🎨 接下来选择主题风格（回复编号或名称）：\n1. 商务蓝（默认）\n2. 极简白\n3. 科技黑\n4. 活力橙\n\n或直接回复「确认」使用商务蓝',
+          steps: [{ icon: '✅', text: '大纲已确认，进入设计阶段' }],
+        };
+      }
+      if (d.stage === 'design_pending') {
+        // 设计阶段收到的"确认"= 用当前主题生成
+        return await TOOLS.ppt_generate.handler({ userId });
+      }
+      if (d.stage === 'done') return { summary: '🎉 PPT已生成过。要改的话请重新发起，例如"帮我做一份XX的PPT"' };
+      return { summary: `当前阶段：${d.stage}，请按提示操作` };
+    },
+  },
+  ppt_theme: {
+    description: '设置PPT主题风格',
+    async handler({ intent, userId, message }) {
+      const ppt = require('./ppt');
+      const d = ppt.getDraft(userId);
+      if (!d || d.stage !== 'design_pending') return { summary: '⚠️ 请先完成大纲确认再选主题' };
+      const map = { '1': 'business_blue', 商务蓝: 'business_blue', '2': 'minimal_white', 极简白: 'minimal_white', '3': 'tech_dark', 科技黑: 'tech_dark', '4': 'warm_orange', 活力橙: 'warm_orange' };
+      let key = null;
+      for (const k of Object.keys(map)) { if (String(message).includes(k)) { key = map[k]; break; } }
+      key = key || intent.theme_key;
+      const theme = key && ppt.setTheme(userId, key);
+      if (!theme) return { summary: '⚠️ 未识别的主题，可选：商务蓝 / 极简白 / 科技黑 / 活力橙' };
+      d.stage = 'design_confirmed';
+      // 选完主题直接生成
+      const gen = await TOOLS.ppt_generate.handler({ userId });
+      return gen;
+    },
+  },
+  ppt_generate: {
+    description: '生成PPTX文件',
+    async handler({ userId }) {
+      const ppt = require('./ppt');
+      const d = ppt.getDraft(userId);
+      if (!d) return { summary: '⚠️ 当前没有PPT草稿' };
+      if (d.stage === 'outline_pending') return { summary: '⛔ 大纲还没确认。先回复「确认」' };
+      const r = await ppt.generatePptx(userId);
+      if (!r.ok) return { summary: '⚠️ 导出失败：' + r.error };
+      return {
+        summary: `🎉 PPT 已生成！\n\n📄 文件：${r.fileName}\n📊 共 ${r.pageCount} 页 · 主题：${(require('./ppt').THEMES[d.theme] || {}).label || d.theme}\n\n⬇️ 点击下载：/api/ppt/download/t/${r.downloadTicket}\n（原生 .pptx，可用 Office/WPS 二次编辑 · 链接 10 分钟内有效）`,
+        data: { exportId: r.exportId, fileName: r.fileName, downloadUrl: `/api/ppt/download/t/${r.downloadTicket}` },
+        steps: [{ icon: '📊', text: `已生成 ${r.pageCount} 页 PPT` }],
+      };
+    },
+  },
 };
 
 /**
@@ -731,7 +928,15 @@ B. 用户要执行操作（可多个）：
 2. args 从用户原话精确提取：title 取引号内或动词后的核心名词原文，禁止发明、禁止用代词（如"它"）
 3. 涉及实时信息/外部知识用 web_search，query=完整搜索词
 4. 纯知识问答/闲聊/建议用格式 A 直接回答，不要强行调用工具
-5. 只输出 JSON`;
+5. PPT 类请求（做/生成/修改PPT、确认大纲）：
+   - 新主题 → 只调用 ppt_outline，args: {"topic":"主题"}。绝不连续调用多个 ppt 工具——PPT 是分阶段流程，每步要等用户确认
+   - 用户说"确认/可以/没问题"且存在进行中的草稿 → 调用 ppt_confirm
+   - 用户选主题风格（商务蓝/极简白/科技黑/活力橙）→ ppt_theme
+   - "第X页改成…/第X页展开讲讲" → ppt_edit_page
+   - "加一页讲XX/新增一页XX" → ppt_add_page，args: {"topic":"XX"}
+   - "删掉第X页" → ppt_edit_page（用户意图删除时在 message 里说明即可）
+   - "导出/下载 PPT" → ppt_generate
+6. 只输出 JSON`;
 
 /**
  * 解析 LLM 的 agent 计划 JSON
@@ -815,12 +1020,18 @@ async function runAgentLoop(userId, message, opts = {}) {
     const exec = await executeToolSafe(step.tool, fakeIntent, userId, message, { onDelta, onStep });
     allSteps.push(...(exec.steps || []));
     lastIntent = step.tool;
-    results.push(`${step.tool}: ${exec.summary || 'done'}`.slice(0, 300));
+    // PPT 类工具的 summary 是给用户看的主要内容（大纲/页面），不截断；其他工具防超长兜底 800
+    const isLongForm = step.tool.startsWith('ppt_');
+    results.push(`${step.tool}: ${exec.summary || 'done'}`.slice(0, isLongForm ? 6000 : 300));
   }
 
-  // 4. 汇总最终回复
-  const summaryText = results.map((r) => `• ${r}`).join('\n');
-  const reply = `已完成 ${results.length} 个操作：\n${summaryText}`;
+  // 4. 汇总最终回复（多步时用分隔线，单步直接展示内容避免"已完成1个操作"噪音）
+  let reply;
+  if (results.length === 1) {
+    reply = results[0].replace(/^ppt_\w+: /, '');
+  } else {
+    reply = `已完成 ${results.length} 个操作：\n${results.map((r) => `• ${r}`).join('\n')}`;
+  }
   if (onDelta) onDelta(reply);
   return { intent: lastIntent, confidence: 1, reply, data: null, steps: allSteps };
 }
@@ -996,6 +1207,7 @@ module.exports = {
   classifyIntent,
   offlineClassify,
   safeParseJson,
+  extractPageNo,
   chat,
   getMemories,
   inferCronFromMessage,

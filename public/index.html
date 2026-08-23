@@ -175,6 +175,12 @@
 
       <!-- 对话（核心界面） -->
       <section class="panel active" id="panel-chat">
+        <!-- 左侧会话历史 -->
+        <aside class="chat-history" id="chatHistory">
+          <button class="primary new-chat-btn" id="btnNewChat">＋ 新对话</button>
+          <div class="session-list" id="sessionList"><div class="muted" style="padding:8px">加载中…</div></div>
+        </aside>
+
         <div class="chat-shell">
           <div class="chat-head">
             <div class="chat-avatar">🤖</div>
@@ -217,6 +223,24 @@
             <div class="chat-input-hint" id="chatHint">Enter 发送 · Shift+Enter 换行 · 🎤 语音输入</div>
           </div>
         </div>
+
+        <!-- PPT 实时预览侧栏（有草稿时自动展开） -->
+        <aside class="ppt-preview hidden" id="pptPreview">
+          <div class="pv-head">
+            <span class="pv-title">📊 PPT 实时预览</span>
+            <button class="ghost small" id="btnPvClose" title="收起">✕</button>
+          </div>
+          <div class="pv-stage-wrap">
+            <div class="pv-slide" id="pvSlide"><!-- 当前页渲染 --></div>
+          </div>
+          <div class="pv-nav">
+            <button class="ghost small" id="btnPvPrev">◀</button>
+            <span class="pv-page" id="pvPage">1 / 1</span>
+            <button class="ghost small" id="btnPvNext">▶</button>
+          </div>
+          <div class="pv-thumbs" id="pvThumbs"><!-- 缩略图列表 --></div>
+          <div class="pv-tip">说「第N页改成…」可直接修改当前草稿</div>
+        </aside>
       </section>
 
       <!-- LLM 配置 -->
@@ -332,8 +356,8 @@
       </section>
     </main>
 
-    <script defer src="app.js?v=24"></script>
-    <link rel="stylesheet" href="styles.css?v=13" />
+    <script defer src="app.js?v=29"></script>
+    <link rel="stylesheet" href="styles.css?v=16" />
     <script>
       // ?nosw=1 临时禁用 Service Worker（用于诊断缓存问题）
       if (!location.search.includes('nosw=1') && 'serviceWorker' in navigator) {

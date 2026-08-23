@@ -141,6 +141,26 @@ function migrate() {
     );
     CREATE INDEX IF NOT EXISTS idx_integrations_channel ON integrations(channel);
 
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      title TEXT NOT NULL DEFAULT '新对话',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id, updated_at);
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER NOT NULL,
+      role TEXT NOT NULL,                    -- user / bot
+      content TEXT NOT NULL,
+      intent TEXT DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, id);
+
+
     -- 给所有数据表加 user_id 列（如不存在），用于多用户隔离
   `);
 
