@@ -985,14 +985,15 @@ function renderMarkdown(src) {
       continue;
     }
     if (!line.trim()) { flushPara(); closeList(); continue; }
-    // PPT 下载链接（票据制）→ 可点击下载卡片
-    const dl = line.match(/^(⬇️ 点击下载：)(\/api\/ppt\/download\/t\/[0-9a-f]+)\s*$/);
+    // PPT/PRD 下载链接（票据制）→ 可点击下载卡片
+    const dl = line.match(/^(⬇️ 点击下载：)(\/api\/(?:ppt|prd)\/download\/t\/[0-9a-f]+)\s*$/);
     if (dl) {
       flushPara(); closeList();
       const url = dl[2];
-      out.push(`<a class="ppt-download-card" href="${url}" download>`
-        + `<span class="pdc-icon">📊</span><span class="pdc-body"><span class="pdc-title">点击下载 PPTX</span>`
-        + `<span class="pdc-sub">原生 PowerPoint 文件 · 链接 10 分钟内有效</span></span>`
+      const isMd = url.includes('/prd/');
+      out.push(`<a class="ppt-download-card${isMd ? ' is-md' : ''}" href="${url}" download>`
+        + `<span class="pdc-icon">${isMd ? '📄' : '📊'}</span><span class="pdc-body"><span class="pdc-title">点击下载 ${isMd ? 'Markdown' : 'PPTX'}</span>`
+        + `<span class="pdc-sub">${isMd ? '产品需求文档 · 可编辑' : '原生 PowerPoint 文件'} · 链接 10 分钟内有效</span></span>`
         + `<span class="pdc-arrow">⬇</span></a>`);
       continue;
     }

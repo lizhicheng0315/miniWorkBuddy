@@ -796,6 +796,90 @@ const TOOLS = {
       };
     },
   },
+
+  // ===== PRD 智能需求分析（CodeBuddy 需求分析能力借鉴）=====
+  prd_generate: {
+    description: '生成结构化产品需求文档PRD（等待用户确认后再导出）',
+    async handler({ intent, userId, message }) {
+      const prd = require('./prd');
+      const topic = intent.topic || intent.title || message.replace(/^(帮我|请|生成|写)(?:做|写)?一份?(?:关于|关于|描述)?/i, '').trim();
+      if (!topic) return { summary: '⚠️ 请描述你要分析的需求主题，例如"做一个社区团购小程序的需求文档"' };
+      const prompt = `你是资深产品经理。根据用户需求「${topic}」，生成一份结构化的产品需求文档(PRD)。
+只返回 JSON：{
+  "title":"产品名称",
+  "version":"v1.0",
+  "overview":"项目背景与目标概述",
+  "targetUsers":"目标用户画像",
+  "goals":["目标1","目标2"],
+  "userStories":["用户故事1","用户故事2"],
+  "features":[
+    {"name":"功能名","priority":"高/中/低","description":"详细描述","acceptance":["验收标准1","验收标准2"]}
+  ],
+  "constraints":["约束条件"],
+  "timeline":"时间规划",
+  "metrics":["成功指标1","成功指标2"]
+}
+要求：3-5个功能模块，每个功能至少2条验收标准，目标和指标要量化。`;
+      const r = await llm.chat(
+        [{ role: 'system', content: '你是一位资深产品经理，擅长编写结构化需求文档。只输出 JSON，不要任何解释或 Markdown 包裹。' }, { role: 'user', content: prompt }],
+        { temperature: 0.5, max_tokens: 2000, userId, intent: 'prd_generate' }
+      );
+      if (!r.ok) return { summary: '⚠️ PRD 生成失败：' + r.error };
+      if (r.finish_reason === 'length') return { summary: '⚠️ PRD 太长被截断，请减少需求范围后重试' };
+      const parsed = safeParseJson(r.text);
+      if (!parsed || !parsed.features || !parsed.features.length) {
+        return { summary: '⚠️ PRD 格式异常，请重试' };
+      }
+      const draft = prd.createDraft(userId, topic, parsed);
+      return {
+        summary: prd.previewText(draft) + '\n\n⛔ 请确认：\n• 回复「确认」导出为 Markdown\n• 说「功能X展开描述」「加一条约束」来修改',
+        data: { features: draft.features.length, topic: draft.title },
+        steps: [{ icon: '📋', text: `已生成《${draft.title}》PRD（${draft.features.length} 个功能模块）` }],
+      };
+    },
+  },
+  prd_review: {
+    description: '审查当前PRD草稿，输出优化建议',
+    async handler({ userId }) {
+      const prd = require('./prd');
+      const d = prd.getDraft(userId);
+      if (!d) return { summary: '⚠️ 没有进行中的 PRD，先说"帮我写一份XX的需求文档"' };
+      const r = await llm.chat(
+        [
+          { role: 'system', content: '你是产品评审专家。审查这份 PRD，给出 3-5 条具体可操作的优化建议（缺什么、哪里模糊、功能优先级合理性等）。' },
+          { role: 'user', content: prd.reviewPreviewText(d) },
+        ],
+        { temperature: 0.4, max_tokens: 600, userId, intent: 'prd_review' }
+      );
+      if (!r.ok) return { summary: '⚠️ 审查失败：' + r.error };
+      prd.updateDraft(userId, { reviewNotes: r.text.trim() });
+      return {
+        summary: '🔍 PRD 审查意见：\n\n' + r.text.trim() + '\n\n回复「确认」导出 Markdown，或根据建议修改',
+        steps: [{ icon: '🔍', text: 'PRD 审查完成' }],
+      };
+    },
+  },
+  prd_export: {
+    description: '导出PRD为Markdown文件',
+    async handler({ userId }) {
+      const prd = require('./prd');
+      const d = prd.getDraft(userId);
+      if (!d) return { summary: '⚠️ 没有 PRD 草稿' };
+      const r = prd.exportMd(userId);
+      if (!r.ok) return { summary: '⚠️ 导出失败：' + r.error };
+      return {
+        summary: `📄 PRD 已导出为 Markdown\n\n📝 文件：${r.fileName}\n📊 ${d.features.length} 个功能模块 · ${d.goals.length} 个目标\n\n⬇️ 点击下载：/api/prd/download/t/${r.ticket}`,
+        data: { ticket: r.ticket, fileName: r.fileName },
+        steps: [{ icon: '📄', text: '已导出 PRD Markdown' }],
+      };
+    },
+  },
+  prd_confirm: {
+    description: '确认PRD并导出Markdown',
+    async handler({ userId }) {
+      return await TOOLS.prd_export.handler({ userId });
+    },
+  },
 };
 
 /**
@@ -956,7 +1040,11 @@ B. 用户要执行操作（可多个）：
    - "删掉第X页" → ppt_edit_page（用户意图删除时在 message 里说明即可）
    - "导出/下载 PPT" → ppt_generate
 6. 需求有歧义/缺关键参数/多种理解都可能时 → 调用 ask_clarification，args: {"question":"你的追问"}，一次只问一个最关键的问题。宁可问清楚也不要猜错后执行危险操作（如删除、生成大文件）
-7. 只输出 JSON`;
+7. PRD 类请求（需求文档/需求分析/PRD）：
+   - 新需求 → 只调用 prd_generate，args: {"topic":"需求主题"}
+   - "确认/导出" → prd_confirm
+   - "审查/优化建议" → prd_review
+8. 只输出 JSON`;
 
 /**
  * 解析 LLM 的 agent 计划 JSON
@@ -984,22 +1072,30 @@ async function runAgentLoop(userId, message, opts = {}) {
   const onDelta = (opts && typeof opts.onDelta === 'function') ? opts.onDelta : null;
   const onStep = (opts && typeof opts.onStep === 'function') ? opts.onStep : null;
 
-  // 注入 PPT 草稿状态（规划器需要知道"是否存在进行中的草稿"才能正确路由 ppt_confirm）
+  // 注入 PPT + PRD 草稿状态（规划器需要知道"是否存在进行中的草稿"才能正确路由）
   let draftContext = '';
   try {
     const d = require('./ppt').getDraft(userId);
-    if (d) {
-      draftContext = `\n[当前状态] 用户有一个进行中的PPT草稿：《${d.title}》（${d.pages.length} 页，阶段：${d.stage}）。用户此时说"确认/可以/好的"就是在推进这个流程。`;
-    }
+    if (d) draftContext += `\n[当前状态] 用户有一个进行中的PPT草稿：《${d.title}》（${d.pages.length} 页，阶段：${d.stage}）。用户此时说"确认/可以/好的"就是在推进这个流程。`;
+    const pd = require('./prd').getDraft(userId);
+    if (pd) draftContext += `\n[当前状态] 用户有一个进行中的PRD草稿：《${pd.title}》（${pd.features.length}个功能模块）。用户此时说"确认"就是在导出。`;
   } catch (_) {}
 
-  // 确定性指令快通道：纯确认词直接走 ppt_confirm，不赌 LLM 路由
+  // 确定性指令快通道
   const trimmed = message.trim();
-  if (draftContext && /^(确认|确定|可以|好的?|ok|yes|继续)[。！!。\s]*$/i.test(trimmed)) {
-    logger.info('agent: fast-path confirm');
+  // PPT 确认
+  if (draftContext.includes('PPT草稿') && /^(确认|确定|可以|好的?|ok|yes|继续)[。！!。\s]*$/i.test(trimmed)) {
+    logger.info('agent: fast-path ppt-confirm');
     const r = await executeToolSafe('ppt_confirm', { intent: 'ppt_confirm' }, userId, message, { onDelta, onStep });
     if (onDelta && r.summary) onDelta(r.summary);
     return { intent: 'ppt_confirm', confidence: 1, reply: r.summary || '✅ 已确认', data: null, steps: r.steps || [] };
+  }
+  // PRD 确认（导出 Markdown）
+  if (draftContext.includes('PRD草稿') && /^(确认|确定|可以|导出|好的?|ok|yes|继续)[。！!。\s]*$/i.test(trimmed)) {
+    logger.info('agent: fast-path prd-confirm');
+    const r = await executeToolSafe('prd_confirm', { intent: 'prd_confirm' }, userId, message, { onDelta, onStep });
+    if (onDelta && r.summary) onDelta(r.summary);
+    return { intent: 'prd_confirm', confidence: 1, reply: r.summary || '📄 已导出', data: null, steps: r.steps || [] };
   }
   // 设计阶段选主题快通道：纯主题词直接走 ppt_theme
   if (/^(商务蓝|极简白|科技黑|活力橙|[1-4])[。！!。\s]*$/.test(trimmed)) {
@@ -1086,17 +1182,18 @@ async function runAgentLoop(userId, message, opts = {}) {
     const exec = await executeToolSafe(step.tool, fakeIntent, userId, message, { onDelta, onStep });
     allSteps.push(...(exec.steps || []));
     lastIntent = step.tool;
-    // PPT 类工具的 summary 是给用户看的主要内容（大纲/页面），不截断；其他工具防超长兜底 800
-    const isLongForm = step.tool.startsWith('ppt_');
-    results.push(`${step.tool}: ${exec.summary || 'done'}`.slice(0, isLongForm ? 6000 : 300));
+    // PPT/PRD 类工具的 summary 是给用户看的主要内容（大纲/PRD预览），不截断
+    // 其他工具防超长兜底 600；工具名前缀在下面剥离，这里只存 summary
+    const isLongForm = step.tool.startsWith('ppt_') || step.tool.startsWith('prd_');
+    results.push({ tool: step.tool, summary: exec.summary || 'done', longForm: isLongForm });
   }
 
   // 4. 汇总最终回复（多步时用分隔线，单步直接展示内容避免"已完成1个操作"噪音）
   let reply;
   if (results.length === 1) {
-    reply = results[0].replace(/^ppt_\w+: /, '');
+    reply = results[0].summary;
   } else {
-    reply = `已完成 ${results.length} 个操作：\n${results.map((r) => `• ${r}`).join('\n')}`;
+    reply = results.map((r) => `• ${r.tool}: ${r.summary.slice(0, 300)}`).join('\n');
   }
   if (onDelta) onDelta(reply);
   return { intent: lastIntent, confidence: 1, reply, data: null, steps: allSteps };
