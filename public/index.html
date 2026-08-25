@@ -45,7 +45,16 @@
       <section class="panel" id="panel-todos">
         <div class="row">
           <h2>待办清单</h2>
-          <button class="primary" id="btnTodoNew">+ 新建</button>
+          <div class="row-right">
+            <label class="density-toggle" title="列表密度">
+              <select id="todoDensity">
+                <option value="compact">紧凑</option>
+                <option value="normal" selected>标准</option>
+                <option value="loose">宽松</option>
+              </select>
+            </label>
+            <button class="primary" id="btnTodoNew">+ 新建</button>
+          </div>
         </div>
 
         <!-- 快速添加（始终可见） -->
@@ -80,22 +89,45 @@
             <button type="button" id="todoCancel">取消</button>
           </div>
         </form>
+
+        <!-- 筛选栏（优先级 + 分类 + 排序） -->
         <div class="card filter-bar">
-          <span class="muted">筛选：</span>
-          <button class="filter-chip active" data-filter="all">全部 <span class="count" id="cntAll">0</span></button>
-          <button class="filter-chip" data-filter="open">未完成 <span class="count" id="cntOpen">0</span></button>
-          <button class="filter-chip" data-filter="p1">🔴 高 <span class="count" id="cntP1">0</span></button>
-          <button class="filter-chip" data-filter="p2">🟡 中 <span class="count" id="cntP2">0</span></button>
-          <button class="filter-chip" data-filter="p3">🔵 低 <span class="count" id="cntP3">0</span></button>
-          <button class="filter-chip" data-filter="done">✅ 已完成 <span class="count" id="cntDone">0</span></button>
-          <span class="muted right">排序：</span>
-          <select id="todoSort">
-            <option value="priority">优先级</option>
-            <option value="due">截止时间</option>
-            <option value="created">创建时间</option>
-          </select>
+          <div class="filter-row">
+            <button class="filter-chip active" data-filter="all">全部 <span class="count" id="cntAll">0</span></button>
+            <button class="filter-chip" data-filter="open">未完成 <span class="count" id="cntOpen">0</span></button>
+            <button class="filter-chip" data-filter="p1">🔴 高 <span class="count" id="cntP1">0</span></button>
+            <button class="filter-chip" data-filter="p2">🟡 中 <span class="count" id="cntP2">0</span></button>
+            <button class="filter-chip" data-filter="p3">🔵 低 <span class="count" id="cntP3">0</span></button>
+            <button class="filter-chip" data-filter="done">✅ 已完成 <span class="count" id="cntDone">0</span></button>
+          </div>
+          <div class="filter-row filter-row2">
+            <div id="categoryChips" class="cat-chips"></div>
+            <span class="muted right">排序：</span>
+            <select id="todoSort">
+              <option value="priority">优先级</option>
+              <option value="due">截止时间</option>
+              <option value="created">创建时间</option>
+            </select>
+          </div>
         </div>
+
+        <!-- 批量操作栏（选中多项时显示） -->
+        <div class="batch-bar hidden" id="batchBar">
+          <span class="batch-count">已选 <span id="batchCount">0</span> 项</span>
+          <button id="batchDone" class="ghost small">✅ 全部完成</button>
+          <button id="batchHigh" class="ghost small">🔴 设为高优</button>
+          <button id="batchDel" class="ghost small danger">🗑 批量删除</button>
+          <button id="batchClear" class="ghost small">取消选择</button>
+        </div>
+
         <div id="todoList" class="list"></div>
+
+        <!-- 空状态 -->
+        <div id="todoEmpty" class="todo-empty hidden">
+          <div class="todo-empty-icon">🎉</div>
+          <div class="todo-empty-title">所有任务已完成！</div>
+          <div class="todo-empty-sub">享受清空待办的成就感，或者添加一个新任务</div>
+        </div>
       </section>
 
       <!-- 日程 -->

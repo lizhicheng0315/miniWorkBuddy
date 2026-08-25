@@ -7,6 +7,7 @@ const router = express.Router();
 
 router.use(requireAuth);
 
+// 待办列表
 router.get('/', (req, res) => {
   const { status, category } = req.query;
   const rows = db.list(
@@ -20,6 +21,38 @@ router.get('/', (req, res) => {
   );
   rows.sort((a, b) => (a.priority || 2) - (b.priority || 2));
   res.json(rows);
+});
+
+// 分类列表（去重）
+router.get('/categories', (req, res) => {
+  const rows = db.list('todos', null, req.user.id);
+  const cats = [...new Set(rows.map((t) => t.category).filter(Boolean))].sort();
+  res.json(cats);
+});
+
+// 批量操作
+router.post('/batch', (req, res) => {
+  const { ids, action, priority } = req.body || {};
+  if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids 必填' });
+  const allowed = ['complete', 'delete', 'priority'];
+  if (!allowed.includes(action)) return res.status(400).json({ error: 'action 必须是 complete/delete/priority' });
+  let count = 0;
+  for (const id of ids) {
+    const numId = Number(id);
+    if (action === 'complete') {
+      const cur = db.find('todos', numId, req.user.id);
+      if (cur && cur.status !== 'done') {
+        db.update('todos', numId, { status: 'done', completed_at: db.nowIso(), updated_at: db.nowIso() }, req.user.id);
+        count++;
+      }
+    } else if (action === 'delete') {
+      if (db.remove('todos', numId, req.user.id)) count++;
+    } else if (action === 'priority') {
+      const p = Number(priority) || 2;
+      if (db.update('todos', numId, { priority: p, updated_at: db.nowIso() }, req.user.id)) count++;
+    }
+  }
+  res.json({ ok: true, count });
 });
 
 router.post('/', (req, res) => {
