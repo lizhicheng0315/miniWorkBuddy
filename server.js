@@ -10,6 +10,7 @@ const express = require('express');
 const config = require('./src/config');
 const logger = require('./src/logger');
 const scheduler = require('./src/services/scheduler');
+const cron = require('node-cron');
 const llm = require('./src/services/llm');
 const auth = require('./src/auth');
 const db = require('./src/db');
@@ -96,6 +97,8 @@ async function main() {
   app.use('/api', (req, res) => res.status(404).json({ error: 'not found' }));
 
   scheduler.loadAll();
+  // 重复任务：每小时检查一次（完成的重复待办自动生成新实例）
+  cron.schedule('0 * * * *', () => scheduler.checkRecurring());
 
   // 启动 HTTP 或 HTTPS
   let server;

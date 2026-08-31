@@ -94,4 +94,43 @@ function shutdown() {
   tasks.clear();
 }
 
-module.exports = { loadAll, register, unregister, isValidCron, shutdown };
+/**
+ * 重复任务：检查已完成且有 recur_rule 的待办，自动创建新实例
+ * 规则：daily=明天截止, weekly=下周截止
+ */
+function checkRecurring() {
+  try {
+    const done = db.list('todos', (t) => t.status === 'done' && t.recur_rule);
+    for (const t of done) {
+      const userId = t.user_id;
+      if (!userId) continue;
+      let nextDue = null;
+      if (t.recur_rule === 'daily') {
+        nextDue = new Date(Date.now() + 86400000).toISOString().split('T')[0] + 'T09:00:00.000Z';
+      } else if (t.recur_rule === 'weekly') {
+        nextDue = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0] + 'T09:00:00.000Z';
+      } else if (t.recur_rule === 'monthly') {
+        const next = new Date();
+        next.setMonth(next.getMonth() + 1);
+        nextDue = next.toISOString().split('T')[0] + 'T09:00:00.000Z';
+      }
+      if (!nextDue) continue;
+      // 创建新实例
+      db.insert('todos', {
+        user_id: userId,
+        title: t.title,
+        notes: t.notes || '',
+        priority: t.priority || 2,
+        category: t.category || '',
+        due_at: nextDue,
+        status: 'open',
+        recur_rule: t.recur_rule,
+      });
+      logger.info(`recurring: ${t.title} (${t.recur_rule}) → new instance due ${nextDue}`);
+    }
+  } catch (e) {
+    logger.warn('checkRecurring failed:', e.message);
+  }
+}
+
+module.exports = { loadAll, register, unregister, isValidCron, shutdown, checkRecurring };

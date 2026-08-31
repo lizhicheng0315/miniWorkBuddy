@@ -169,6 +169,7 @@ function migrate() {
   addColumnIfMissing('schedule_events', 'user_id', 'INTEGER');
   addColumnIfMissing('reminders', 'user_id', 'INTEGER');
   addColumnIfMissing('settings', 'user_id', 'INTEGER');
+  addColumnIfMissing('todos', 'recur_rule', 'TEXT');
 
   // 多用户复合索引
   db.run('CREATE INDEX IF NOT EXISTS idx_todos_user_status_due ON todos(user_id, status, due_at)');

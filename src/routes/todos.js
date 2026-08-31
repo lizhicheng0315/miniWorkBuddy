@@ -120,7 +120,7 @@ router.post('/batch', (req, res) => {
 });
 
 router.post('/', (req, res) => {
-  const { title, notes, priority, category, due_at } = req.body || {};
+  const { title, notes, priority, category, due_at, recur_rule } = req.body || {};
   if (!title || !String(title).trim()) {
     return res.status(400).json({ error: 'title 必填' });
   }
@@ -132,6 +132,7 @@ router.post('/', (req, res) => {
     category: category || '',
     due_at: due_at || null,
     status: 'open',
+    recur_rule: recur_rule || null,
   });
   res.status(201).json(row);
 });

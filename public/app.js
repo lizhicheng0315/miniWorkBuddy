@@ -302,6 +302,7 @@ function renderTodos() {
     const dueText = dueInfo ? ('截止 ' + dueInfo.text) : '';
     const dueCls = dueInfo ? dueInfo.class : '';
     const catBadge = t.category ? '<span class="badge cat-badge">' + escapeHtml(t.category) + '</span>' : '';
+    const recurBadge = t.recur_rule ? '<span class="badge recur-badge" title="重复: ' + t.recur_rule + '">🔄</span>' : '';
     const descPreview = t.notes
       ? '<div class="todo-desc-preview" data-desc="' + encodeURIComponent(t.notes) + '">'
         + renderMarkdown(t.notes.slice(0, 200)) + '</div>'
@@ -315,6 +316,7 @@ function renderTodos() {
       '  <div class="meta">',
       '    <span class="badge p' + (t.priority || 2) + '">' + ['','🔴 高','🟡 中','🔵 低'][t.priority || 2] + '</span>',
       catBadge,
+      recurBadge,
       dueText ? '<span class="' + dueCls + '">' + dueText + '</span>' : '',
       '  </div>',
       descPreview,
@@ -406,6 +408,69 @@ $$('.view-tab').forEach((b) => b.addEventListener('click', () => {
 $('#todoSort').addEventListener('change', (e) => { todoSort = e.target.value; renderTodos(); });
 $('#btnTodoNew').addEventListener('click', () => $('#todoForm').classList.toggle('hidden'));
 $('#todoCancel').addEventListener('click', () => $('#todoForm').classList.add('hidden'));
+
+// 快速添加待办（解析优先级 + 分类 + 重复规则）
+const PRIORITY_KW = [
+  { kw: /^(?:高|重要|紧急|urgent)/i, p: 1 },
+  { kw: /^(?:低|不急|稍后)/i, p: 3 },
+];
+function parseQuickInput(raw) {
+  let text = String(raw || '').trim();
+  if (!text) return null;
+  let priority = parseInt($('#quickTodoPriority')?.value, 10) || 2;
+  for (const r of PRIORITY_KW) {
+    if (r.kw.test(text)) { priority = r.p; text = text.replace(r.kw, '').trim(); break; }
+  }
+  let recurRule = '';
+  if (/每天/.test(text)) { recurRule = 'daily'; text = text.replace(/每天/g, '').trim(); }
+  else if (/每周/.test(text)) { recurRule = 'weekly'; text = text.replace(/每周/g, '').trim(); }
+  let category = '';
+  const catColon = text.match(/^([\u4e00-\u9fa5A-Za-z0-9]+)\s*[:：]\s*(.+)$/);
+  if (catColon && catColon[1].length <= 8) { category = catColon[1]; text = catColon[2].trim(); }
+  else {
+    const hashCat = text.match(/[#@]([\u4e00-\u9fa5A-Za-z0-9]+)\s*$/);
+    if (hashCat) { category = hashCat[1]; text = text.replace(hashCat[0], '').trim(); }
+  }
+  text = text.replace(/^[，。、\s]+|[，。、\s]+$/g, '').trim();
+  if (!text) return null;
+  return { title: text, priority, category: category || null, recur_rule: recurRule || null };
+}
+function renderQuickHint() {
+  const raw = $('#quickTodoInput')?.value;
+  const hint = $('#quickTodoHint');
+  if (!raw?.trim()) { hint.textContent = ''; return; }
+  const parsed = parseQuickInput(raw);
+  if (!parsed) { hint.textContent = ''; return; }
+  const parts = ['将创建：<b>' + escapeHtml(parsed.title) + '</b>'];
+  parts.push(parsed.priority === 1 ? '🔴 高' : parsed.priority === 3 ? '🔵 低' : '🟡 中');
+  if (parsed.category) parts.push('分类 <b>' + escapeHtml(parsed.category) + '</b>');
+  if (parsed.recur_rule) parts.push(parsed.recur_rule === 'daily' ? '🔄 每天' : '🔄 每周');
+  hint.innerHTML = parts.join(' · ');
+}
+$('#quickTodoInput')?.addEventListener('input', renderQuickHint);
+$('#quickTodoPriority')?.addEventListener('change', renderQuickHint);
+$('#quickTodoForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = $('#quickTodoInput');
+  const parsed = parseQuickInput(input.value);
+  if (!parsed) { input.focus(); return; }
+  const btn = e.target.querySelector('button[type=submit]');
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    await api('/api/todos', { method: 'POST', body: parsed });
+    input.value = '';
+    $('#quickTodoHint').textContent = '';
+    await loadTodos();
+  } catch (err) {
+    alert('添加失败：' + (err.message || err));
+  } finally {
+    btn.disabled = false; btn.textContent = '添加';
+    input.focus();
+  }
+});
+function focusQuickTodoOnTab() { setTimeout(() => { const inp = $('#quickTodoInput'); if (inp) inp.focus(); }, 50); }
+$$('.tab').forEach((b) => b.addEventListener('click', () => { if (b.dataset.tab === 'todos') focusQuickTodoOnTab(); }));
+focusQuickTodoOnTab();
 
 // 高级待办表单提交（含 Markdown 描述）
 $('#todoForm').addEventListener('submit', async (e) => {

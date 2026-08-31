@@ -101,6 +101,12 @@
             </label>
             <label>分类 <input name="category" placeholder="工作 / 生活…" /></label>
             <label>截止时间 <input name="due_at" type="datetime-local" /></label>
+            <label>重复 <select name="recur_rule">
+              <option value="">不重复</option>
+              <option value="daily">每天</option>
+              <option value="weekly">每周</option>
+              <option value="monthly">每月</option>
+            </select></label>
           </div>
           <label class="desc-field">
             描述（支持 **Markdown**）
