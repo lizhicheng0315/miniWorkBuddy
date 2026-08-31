@@ -826,6 +826,101 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 .todo-loose .item .meta { margin-top: 6px; }
 .row-right { display: flex; align-items: center; gap: 8px; }
 
+/* ===== 视图切换标签 ===== */
+.view-tabs {
+  display: flex; gap: 2px; margin-bottom: 10px;
+  background: var(--bg); border-radius: 10px; padding: 3px;
+}
+.view-tab {
+  border: none; background: transparent; padding: 8px 16px;
+  border-radius: 8px; font-size: 13px; color: var(--muted);
+  cursor: pointer; transition: all 0.15s;
+}
+.view-tab:hover { background: var(--accent-soft); color: var(--accent-strong); }
+.view-tab.active { background: var(--accent); color: #fff; font-weight: 600; box-shadow: 0 1px 4px rgba(37,99,235,0.2); }
+
+/* 今日计划卡片 */
+.today-summary {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+  margin-bottom: 12px;
+}
+.today-stat {
+  text-align: center; padding: 14px 8px; border-radius: 12px;
+  background: var(--panel); border: 1px solid var(--border);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+}
+.today-stat .num { font-size: 22px; font-weight: 800; }
+.today-stat .num.high { color: #dc2626; }
+.today-stat .num.mid { color: #f59e0b; }
+.today-stat .num.done { color: #16a34a; }
+.today-stat .num.blue { color: #2563eb; }
+.today-stat .lbl { font-size: 11px; color: var(--muted); margin-top: 2px; }
+@media (max-width: 500px) { .today-summary { grid-template-columns: repeat(2, 1fr); } }
+
+/* 进度条 */
+.progress-bar {
+  height: 6px; background: var(--border); border-radius: 3px;
+  overflow: hidden; margin-top: 8px;
+}
+.progress-bar .fill {
+  height: 100%; border-radius: 3px;
+  background: linear-gradient(90deg, #22c55e, #16a34a);
+  transition: width 0.6s ease;
+}
+
+/* AI 每日简报 */
+.daily-brief {
+  border-left: 3px solid var(--accent);
+}
+.daily-brief-text {
+  font-size: 14px; line-height: 1.7;
+  color: var(--text); white-space: pre-wrap;
+}
+
+/* 今日面板有截止时间的项标注"今天" */
+.today-badge { background: #eff6ff; color: #1d4ed8; padding: 1px 8px; border-radius: 6px; font-size: 10px; font-weight: 600; }
+
+/* 归档视图样式 */
+.item.archived { opacity: 0.5; border-style: dashed; }
+.item.archived .title { text-decoration: line-through; color: var(--muted); }
+
+/* ===== 任务描述 Markdown 编辑器 ===== */
+.desc-field { display: block; }
+.desc-editor {
+  border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+  background: #fff;
+}
+.desc-tabs {
+  display: flex; gap: 0; border-bottom: 1px solid var(--border);
+}
+.desc-tab {
+  border: none; background: transparent; padding: 6px 14px;
+  font-size: 12px; color: var(--muted); cursor: pointer;
+  border-bottom: 2px solid transparent; transition: all 0.15s;
+}
+.desc-tab.active { color: var(--accent-strong); border-bottom-color: var(--accent); font-weight: 600; }
+.desc-input {
+  width: 100%; border: none; outline: none; padding: 10px 12px;
+  font-family: inherit; font-size: 13px; resize: vertical; min-height: 80px;
+}
+.desc-preview { padding: 10px 12px; font-size: 13px; min-height: 80px; }
+.desc-preview.hidden { display: none; }
+.desc-input.hidden { display: none; }
+
+/* 待办项描述预览 */
+.todo-desc-preview {
+  margin-top: 6px; padding: 6px 10px;
+  border-left: 2px solid var(--border);
+  font-size: 12px; color: var(--text); max-height: 48px; overflow: hidden;
+  line-height: 1.45; opacity: 0.85; transition: max-height 0.2s;
+}
+.todo-desc-preview.expanded { max-height: 400px; opacity: 1; }
+.todo-desc-toggle {
+  border: none; background: none; color: var(--accent-strong);
+  font-size: 11px; cursor: pointer; padding: 2px 0;
+}
+.todo-desc-toggle:hover { text-decoration: underline; }
+
 /* ===== 日历 ===== */
 .view-tabs { display: flex; gap: 4px; padding: 8px; }
 .view-tab { background: transparent; color: var(--muted); border: 0; padding: 6px 16px; border-radius: 8px; cursor: pointer; }

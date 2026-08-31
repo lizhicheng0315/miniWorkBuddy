@@ -57,6 +57,25 @@
           </div>
         </div>
 
+        <!-- 视图切换：今日计划 / 全部 -->
+        <div class="view-tabs">
+          <button class="view-tab active" data-view="today">📋 今日计划</button>
+          <button class="view-tab" data-view="all">全部待办</button>
+          <button class="view-tab" data-view="archive">🗄 归档</button>
+        </div>
+
+        <!-- 今日仪表盘指标卡 -->
+        <div id="todaySummary" class="today-summary hidden"></div>
+
+        <!-- AI 每日简报 -->
+        <div id="dailyBriefCard" class="card daily-brief hidden">
+          <div class="row">
+            <h3>🤖 AI 今日建议</h3>
+            <button class="ghost small" id="btnRefreshBrief">🔄 重新生成</button>
+          </div>
+          <div id="dailyBriefText" class="daily-brief-text"></div>
+        </div>
+
         <!-- 快速添加（始终可见） -->
         <form id="quickTodoForm" class="quick-add" autocomplete="off">
           <span class="qa-icon">+</span>
@@ -83,7 +102,17 @@
             <label>分类 <input name="category" placeholder="工作 / 生活…" /></label>
             <label>截止时间 <input name="due_at" type="datetime-local" /></label>
           </div>
-          <label>备注 <textarea name="notes" rows="2"></textarea></label>
+          <label class="desc-field">
+            描述（支持 **Markdown**）
+            <div class="desc-editor">
+              <div class="desc-tabs">
+                <button type="button" class="desc-tab active" data-view="edit">编辑</button>
+                <button type="button" class="desc-tab" data-view="preview">预览</button>
+              </div>
+              <textarea name="notes" rows="4" class="desc-input" placeholder="支持 Markdown 格式，如：&#10;- 目标：xxx&#10;**关键步骤**：&#10;1. 第一步&#10;2. 第二步"></textarea>
+              <div class="desc-preview md-body hidden"></div>
+            </div>
+          </label>
           <div class="actions">
             <button type="submit" class="primary">保存</button>
             <button type="button" id="todoCancel">取消</button>

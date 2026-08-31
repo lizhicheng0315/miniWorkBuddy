@@ -139,6 +139,7 @@ let todoFilter = 'all';
 let todoSort = 'priority';
 let todoAllCache = [];
 let todoSelected = new Set();
+let todoView = 'today'; // 'today' | 'all' | 'archive'
 const TODO_DENSITY_KEY = 'workbuddy_todo_density';
 
 function fmtDue(due) {
@@ -209,26 +210,89 @@ function renderTodos() {
     if (el) el.textContent = cnt[k];
   }
   let list = todoAllCache.slice();
-  if (todoFilter === 'open') list = list.filter((t) => t.status !== 'done');
-  else if (todoFilter === 'done') list = list.filter((t) => t.status === 'done');
-  else if (todoFilter.startsWith('cat:')) {
-    const cat = todoFilter.slice(4);
-    list = list.filter((t) => (t.category || '') === cat && t.status !== 'done');
-  } else if (todoFilter === 'p1' || todoFilter === 'p2' || todoFilter === 'p3') {
-    list = list.filter((t) => t.priority === parseInt(todoFilter[1]) && t.status !== 'done');
-  }
-  if (todoSort === 'priority') {
-    list.sort((a, b) => (a.status === 'done' ? 1 : b.status === 'done' ? -1 : (a.priority || 2) - (b.priority || 2)));
-  } else if (todoSort === 'due') {
-    list.sort((a, b) => (!a.due_at ? 1 : !b.due_at ? -1 : new Date(a.due_at) - new Date(b.due_at)));
+  if (todoView === 'today') {
+    // 今日计划：今日截止 + 过期未完成 + 无截止的
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const end = new Date(start.getTime() + 86400000);
+    list = list.filter((t) => {
+      if (t.status === 'done' || t.status === 'archived') return false;
+      if (t.due_at) {
+        const d = new Date(t.due_at);
+        return (d >= start && d < end) || d < start;
+      }
+      return true;
+    });
+    list.sort((a, b) => {
+      const aOv = a.due_at && new Date(a.due_at) < start;
+      const bOv = b.due_at && new Date(b.due_at) < start;
+      if (aOv && !bOv) return -1;
+      if (!aOv && bOv) return 1;
+      return (a.priority || 2) - (b.priority || 2);
+    });
+  } else if (todoView === 'archive') {
+    list = list.filter((t) => t.status === 'archived');
+    list.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
   } else {
-    list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    // 全部视图
+    if (todoFilter === 'open') list = list.filter((t) => t.status !== 'done' && t.status !== 'archived');
+    else if (todoFilter === 'done') list = list.filter((t) => t.status === 'done');
+    else if (todoFilter.startsWith('cat:')) {
+      const cat = todoFilter.slice(4);
+      list = list.filter((t) => (t.category || '') === cat && t.status !== 'done' && t.status !== 'archived');
+    } else if (todoFilter === 'p1' || todoFilter === 'p2' || todoFilter === 'p3') {
+      list = list.filter((t) => t.priority === parseInt(todoFilter[1]) && t.status !== 'done' && t.status !== 'archived');
+    } else {
+      list = list.filter((t) => t.status !== 'archived');
+    }
+    if (todoSort === 'priority') {
+      list.sort((a, b) => (a.status === 'done' ? 1 : b.status === 'done' ? -1 : (a.priority || 2) - (b.priority || 2)));
+    } else if (todoSort === 'due') {
+      list.sort((a, b) => (!a.due_at ? 1 : !b.due_at ? -1 : new Date(a.due_at) - new Date(b.due_at)));
+    } else {
+      list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    }
   }
   if (!list.length) {
     if (emptyEl) emptyEl.classList.remove('hidden');
     return;
   }
   if (emptyEl) emptyEl.classList.add('hidden');
+  // 今日计划：加载仪表盘指标
+  if (todoView === 'today') {
+    loadDashboardStats();
+    loadDailyBrief();
+  } else {
+    const briefCard = $('#dailyBriefCard');
+    if (briefCard) briefCard.classList.add('hidden');
+  }
+  // 今日计划摘要卡片
+  if (todoView === 'today') {
+    const today = new Date();
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const end = new Date(start.getTime() + 86400000);
+    const allToday = todoAllCache.filter((t) => {
+      if (t.status === 'done' || t.status === 'archived') return false;
+      if (t.due_at) { const d = new Date(t.due_at); return (d >= start && d < end) || d < start; }
+      return true;
+    });
+    const overdueCount = allToday.filter((t) => t.due_at && new Date(t.due_at) < start).length;
+    const totalActive = todoAllCache.filter((t) => t.status !== 'archived');
+    const doneAll = todoAllCache.filter((t) => t.status === 'done');
+    const doneRate = totalActive.length ? Math.round((doneAll.length / totalActive.length) * 100) : 0;
+    const summaryEl = document.getElementById('todaySummary');
+    if (summaryEl) {
+      summaryEl.innerHTML =
+        '<div class="today-stat"><div class="num mid">' + allToday.length + '</div><div class="lbl">待完成</div></div>' +
+        '<div class="today-stat"><div class="num high">' + overdueCount + '</div><div class="lbl">已过期</div></div>' +
+        '<div class="today-stat"><div class="num done">' + cnt.done + '</div><div class="lbl">今日完成</div></div>' +
+        '<div class="today-stat"><div class="num blue">' + doneRate + '%</div><div class="lbl">总完成率</div></div>';
+      summaryEl.classList.remove('hidden');
+    }
+  } else {
+    const summaryEl = document.getElementById('todaySummary');
+    if (summaryEl) summaryEl.classList.add('hidden');
+  }
   for (const t of list) {
     const el = document.createElement('div');
     const overdue = t.due_at && t.status !== 'done' && new Date(t.due_at) < new Date();
@@ -238,6 +302,11 @@ function renderTodos() {
     const dueText = dueInfo ? ('截止 ' + dueInfo.text) : '';
     const dueCls = dueInfo ? dueInfo.class : '';
     const catBadge = t.category ? '<span class="badge cat-badge">' + escapeHtml(t.category) + '</span>' : '';
+    const descPreview = t.notes
+      ? '<div class="todo-desc-preview" data-desc="' + encodeURIComponent(t.notes) + '">'
+        + renderMarkdown(t.notes.slice(0, 200)) + '</div>'
+        + '<button class="todo-desc-toggle" data-id="' + t.id + '">展开详情 ▾</button>'
+      : '';
     el.innerHTML = [
       '<input type="checkbox" class="toggle todo-cb" data-id="' + t.id + '" />',
       '<input type="checkbox" class="toggle" data-id="' + t.id + '"' + (t.status === 'done' ? ' checked' : '') + ' />',
@@ -248,8 +317,12 @@ function renderTodos() {
       catBadge,
       dueText ? '<span class="' + dueCls + '">' + dueText + '</span>' : '',
       '  </div>',
+      descPreview,
       '</div>',
-      '<div class="ops"><button data-id="' + t.id + '" class="del danger">删除</button></div>'
+      '<div class="ops">',
+      '<button data-id="' + t.id + '" class="del danger">删除</button>',
+      (t.status === 'done' ? '<button data-id="' + t.id + '" class="archive-btn">🗄 归档</button>' : ''),
+      '</div>'
     ].join('');
     root.appendChild(el);
   }
@@ -267,6 +340,16 @@ function renderTodos() {
     if (!confirm('确定删除？')) return;
     await api('/api/todos/' + e.target.dataset.id, { method: 'DELETE' });
     loadTodos();
+  }));
+  $$('#todoList .archive-btn').forEach((b) => b.addEventListener('click', async () => {
+    await api('/api/todos/' + b.dataset.id, { method: 'PATCH', body: { status: 'archived' } });
+    loadTodos();
+  }));
+  // 描述展开/收起
+  $$('.todo-desc-toggle').forEach((btn) => btn.addEventListener('click', () => {
+    const preview = btn.previousElementSibling;
+    const expanded = preview.classList.toggle('expanded');
+    btn.textContent = expanded ? '收起 ▴' : '展开详情 ▾';
   }));
 }
 
@@ -309,9 +392,71 @@ $$('.filter-chip').forEach((b) => b.addEventListener('click', () => {
   b.classList.add('active');
   renderTodos();
 }));
+$$('.view-tab').forEach((b) => b.addEventListener('click', () => {
+  todoView = b.dataset.view;
+  $$('.view-tab').forEach((x) => x.classList.remove('active'));
+  b.classList.add('active');
+  // 切视图时隐藏/显示筛选栏
+  const filterBar = document.querySelector('#panel-todos .filter-bar');
+  const newBtn = document.getElementById('btnTodoNew');
+  if (filterBar) filterBar.classList.toggle('hidden', todoView !== 'all');
+  if (newBtn) newBtn.classList.toggle('hidden', todoView === 'archive');
+  renderTodos();
+}));
 $('#todoSort').addEventListener('change', (e) => { todoSort = e.target.value; renderTodos(); });
 $('#btnTodoNew').addEventListener('click', () => $('#todoForm').classList.toggle('hidden'));
 $('#todoCancel').addEventListener('click', () => $('#todoForm').classList.add('hidden'));
+
+// 高级待办表单提交（含 Markdown 描述）
+$('#todoForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = Object.fromEntries(fd.entries());
+  if (body.due_at) body.due_at = new Date(body.due_at).toISOString();
+  if (body.priority) body.priority = parseInt(body.priority, 10);
+  try {
+    await api('/api/todos', { method: 'POST', body });
+    e.target.reset();
+    e.target.classList.add('hidden');
+    await loadTodos();
+  } catch (err) {
+    alert('添加失败：' + (err.message || err));
+  }
+});
+
+// 描述编辑器：编辑/预览切换
+$$('.desc-tab').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    $$('.desc-tab').forEach((t) => t.classList.remove('active'));
+    tab.classList.add('active');
+    const input = $('.desc-input');
+    const preview = $('.desc-preview');
+    if (tab.dataset.view === 'preview') {
+      input.classList.add('hidden');
+      preview.classList.remove('hidden');
+      preview.innerHTML = renderMarkdown(input.value || '*（无描述）*');
+    } else {
+      input.classList.remove('hidden');
+      preview.classList.add('hidden');
+    }
+  });
+});
+
+// AI 每日简报
+async function loadDailyBrief() {
+  const card = $('#dailyBriefCard');
+  const text = $('#dailyBriefText');
+  if (!card || !text) return;
+  card.classList.remove('hidden');
+  text.innerHTML = '<span class="muted">正在生成今日建议…</span>';
+  try {
+    const r = await api('/api/todos/daily-brief');
+    text.textContent = r.brief || '暂无简报';
+  } catch (e) {
+    text.textContent = '简报生成失败：' + (e.message || e);
+  }
+}
+$('#btnRefreshBrief')?.addEventListener('click', loadDailyBrief);
 
 // ===== 日程（双视图：月历 + 列表）=====
 let calView = 'month';
