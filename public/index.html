@@ -3,17 +3,29 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#2563eb" />
+    <meta name="theme-color" content="#101a24" />
     <title>WorkBuddy 助手</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-    <link rel="stylesheet" href="styles.css?v=7" />
+<link rel="stylesheet" href="styles.css?v=56" />
+    <link rel="stylesheet" href="theme.css?v=17" />
   </head>
   <body>
+    <script>
+      (() => {
+        try {
+          const saved = localStorage.getItem('workbuddy_theme');
+          const dark = saved ? saved === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+          document.body.classList.toggle('dark', dark);
+          const meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute('content', dark ? '#0a1115' : '#101a24');
+        } catch (_) {}
+      })();
+    </script>
     <!-- 登录遮罩 -->
     <div id="loginOverlay" class="login-overlay">
       <form id="loginForm" class="card login-card">
-        <h2>🧭 WorkBuddy</h2>
+        <h2>WorkBuddy</h2>
         <p class="muted">请登录以使用你的本地助手</p>
         <label>用户名 <input name="username" required autocomplete="username" /></label>
         <label>密码 <input name="password" type="password" required autocomplete="current-password" /></label>
@@ -25,17 +37,17 @@
     </div>
 
     <header class="topbar">
-      <div class="brand"><span class="brand-ico">🧭</span> WorkBuddy</div>
+      <div class="brand"><span class="brand-ico" aria-hidden="true">W</span> WorkBuddy</div>
       <nav class="tabs">
         <button class="tab active" data-tab="chat">对话</button>
         <button class="tab" data-tab="todos">待办</button>
         <button class="tab" data-tab="schedule">日程</button>
         <button class="tab" data-tab="reminders">提醒</button>
-        <button class="tab" data-tab="ai">LLM配置</button>
+        <button class="tab" data-tab="ai">LLM</button>
       </nav>
       <div class="status">
         <span id="userInfo">—</span>
-        <span id="llmStatus">LLM: 检测中…</span>
+        <span id="llmStatus">LLM 检测中…</span>
         <button id="btnLogout" class="small">登出</button>
       </div>
     </header>
@@ -59,9 +71,9 @@
 
         <!-- 视图切换：今日计划 / 全部 -->
         <div class="view-tabs">
-          <button class="view-tab active" data-view="today">📋 今日计划</button>
+          <button class="view-tab active" data-view="today">今日计划</button>
           <button class="view-tab" data-view="all">全部待办</button>
-          <button class="view-tab" data-view="archive">🗄 归档</button>
+          <button class="view-tab" data-view="archive">归档</button>
         </div>
 
         <!-- 今日仪表盘指标卡 -->
@@ -70,8 +82,8 @@
         <!-- AI 每日简报 -->
         <div id="dailyBriefCard" class="card daily-brief hidden">
           <div class="row">
-            <h3>🤖 AI 今日建议</h3>
-            <button class="ghost small" id="btnRefreshBrief">🔄 重新生成</button>
+            <h3>AI 今日建议</h3>
+            <button class="ghost small" id="btnRefreshBrief">重新生成</button>
           </div>
           <div id="dailyBriefText" class="daily-brief-text"></div>
         </div>
@@ -215,51 +227,100 @@
           <div id="dayDetailList"></div>
         </div>
 
-        <!-- 列表视图（保留） -->
         <div id="eventList" class="list hidden"></div>
       </section>
 
       <!-- 提醒 -->
       <section class="panel" id="panel-reminders">
         <div class="row">
-          <h2>每日定时提醒</h2>
-          <button class="primary" id="btnRemNew">+ 新建</button>
+          <h2>提醒与自动化</h2>
+          <button class="primary" id="btnRemNew">+ 新建提醒</button>
         </div>
-        <form id="remForm" class="card form hidden">
-          <div class="grid">
-            <label>名称 <input name="title" required placeholder="如：喝水/写日报" /></label>
-            <label>Cron 表达式 <input name="cron" required placeholder="0 9 * * *  每天 9:00" /></label>
+        <div class="rem-tabs">
+          <button class="rem-view-tab active" data-rem-view="reminders">定时提醒</button>
+          <button class="rem-view-tab" data-rem-view="automations">自动化任务</button>
+        </div>
+
+        <div class="reminder-view" id="remindersView">
+          <form id="remForm" class="card form hidden">
+            <div class="grid">
+              <label>名称 <input name="title" required placeholder="如：喝水/写日报" /></label>
+              <label>Cron 表达式 <input name="cron" required placeholder="0 9 * * *  每天 9:00" /></label>
+            </div>
+            <label>提醒内容 <input name="message" placeholder="可选，弹窗会显示" /></label>
+            <small class="hint">格式：分 时 日 月 周。例：<code>0 9 * * *</code>（每天 9 点）、<code>*/30 9-18 * * 1-5</code>（工作日 9-18 点每 30 分钟）</small>
+            <div class="actions">
+              <button type="submit" class="primary">保存</button>
+              <button type="button" id="remCancel">取消</button>
+            </div>
+          </form>
+          <div id="remList" class="list"></div>
+        </div>
+
+        <!-- Scheduled tasks（仿 Codex automations） -->
+        <div class="reminder-view hidden" id="automationsView">
+          <div class="card automation-card">
+          <div class="row">
+            <h3>自动化任务</h3>
+            <span class="muted" id="autoStatus">—</span>
           </div>
-          <label>提醒内容 <input name="message" placeholder="可选，弹窗会显示" /></label>
-          <small class="hint">格式：分 时 日 月 周。例：<code>0 9 * * *</code>（每天 9 点）、<code>*/30 9-18 * * 1-5</code>（工作日 9-18 点每 30 分钟）</small>
-          <div class="actions">
-            <button type="submit" class="primary">保存</button>
-            <button type="button" id="remCancel">取消</button>
+          <p class="muted">用 cron + prompt 定时让 Agent 在后台执行任务，运行结果会记录在历史里。</p>
+          <div class="cap-row">
+            <button class="small auto-filter active" data-auto-filter="all">全部</button>
+            <button class="small auto-filter" data-auto-filter="enabled">启用</button>
+            <button class="small auto-filter" data-auto-filter="paused">停用</button>
+            <button class="small auto-filter" data-auto-filter="error">异常</button>
+            <button class="small" id="btnAutoPauseAll">全部暂停</button>
+            <button class="small" id="btnAutoResumeAll">全部启用</button>
+            <span class="muted" id="autoStats">—</span>
           </div>
-        </form>
-        <div id="remList" class="list"></div>
+          <form id="autoForm" class="form" autocomplete="off">
+            <div class="grid">
+              <label>名称 <input id="autoName" placeholder="每日站会简报" /></label>
+              <label>Cron <input id="autoCron" placeholder="0 9 * * *" /></label>
+            </div>
+            <label>Prompt <textarea id="autoPrompt" rows="3" placeholder="总结昨天的待办和今天的日程，列出需要我关注的风险"></textarea></label>
+            <div class="actions">
+              <button class="primary small" id="btnAutoSave">创建 automation</button>
+              <span class="muted" id="autoFormStatus"></span>
+            </div>
+          </form>
+          <div id="autoList" class="list"></div>
+          </div>
+        </div>
       </section>
 
       <!-- 对话（核心界面） -->
       <section class="panel active" id="panel-chat">
+        <div class="history-backdrop hidden" id="historyBackdrop"></div>
         <!-- 左侧会话历史 -->
         <aside class="chat-history" id="chatHistory">
+          <button class="history-close ghost small" id="btnHistoryClose" title="关闭会话列表">✕</button>
           <button class="primary new-chat-btn" id="btnNewChat">＋ 新对话</button>
-          <div class="session-list" id="sessionList"><div class="muted" style="padding:8px">加载中…</div></div>
+          <input id="sessionSearch" class="session-search" placeholder="搜索会话…" autocomplete="off" />
+          <div class="session-list" id="sessionList"><div class="muted session-empty">加载中…</div></div>
         </aside>
 
         <div class="chat-shell">
           <div class="chat-head">
-            <div class="chat-avatar">🤖</div>
+            <div class="chat-avatar" aria-hidden="true">W</div>
             <div class="chat-head-info">
               <div class="chat-title">WorkBuddy 智能助手</div>
               <div class="chat-sub" id="chatStatus">随时为你服务</div>
             </div>
             <div class="chat-head-actions">
-              <button id="btnVoiceToggle" class="ghost small toggle-btn" title="语音播报开关">
-                <span class="toggle-dot"></span> 语音
+              <button id="btnHistoryToggle" class="mobile-history-toggle ghost small" title="打开会话列表" aria-expanded="false">会话</button>
+              <button id="btnContextMeter" class="ghost small" title="上下文用量，点击压缩">上下文 —</button>
+              <select id="chatModel" class="model-select" title="模型">
+                <option value="">默认模型</option>
+              </select>
+              <button id="btnDeepThink" class="ghost small toggle-btn premium-toggle" title="深度思考：展示思考链路" aria-pressed="false">
+                <span class="toggle-dot"></span> Think
               </button>
-              <button id="btnWebSearchToggle" class="ghost small toggle-btn" title="联网搜索开关">
+              <button id="btnToolkitToggle" class="ghost small toggle-btn" title="打开助手工具台" aria-expanded="false">
+                <span class="toggle-dot"></span> 工具
+              </button>
+              <button id="btnWebSearchToggle" class="ghost small toggle-btn" title="联网搜索开关" aria-pressed="false">
                 <span class="toggle-dot"></span> 联网
               </button>
               <button id="btnChatClear" class="ghost small" title="清空对话">清空</button>
@@ -268,7 +329,7 @@
           </div>
           <div class="chat-window" id="chatWindow">
             <div class="chat-empty" id="chatEmpty">
-              <div class="chat-empty-ico">💬</div>
+              <div class="chat-empty-ico" aria-hidden="true">W</div>
               <div class="chat-empty-title">你好，我是 WorkBuddy 助手</div>
               <div class="chat-empty-sub">用自然语言管理待办、日程和提醒，试试这样说：</div>
               <div class="chat-empty-chips">
@@ -278,18 +339,314 @@
                 <button class="chip" data-sample="我今天还有什么没做">📋 我今天还有什么没做</button>
                 <button class="chip" data-sample="生成今日日报">📝 生成今日日报</button>
                 <button class="chip" data-sample="把买牛奶标记完成">✔️ 把买牛奶标记完成</button>
+                <button class="chip" data-sample="记住我每天9点开始工作">🧠 记住我的习惯</button>
+                <button class="chip" data-sample="打开百度首页">🌐 打开浏览器</button>
+                <button class="chip" data-sample="截个屏">🖥️ 电脑截屏</button>
               </div>
             </div>
           </div>
           <div class="chat-input">
+            <div class="slash-menu hidden" id="slashMenu"></div>
+            <div class="mention-menu hidden" id="mentionMenu"></div>
+            <div class="composer-panel hidden" id="composerPanel">
+              <div class="panel-head">
+                <span id="panelTitle">添加</span>
+                <button id="panelClose" class="ghost small" title="关闭">✕</button>
+              </div>
+              <div class="panel-body" id="panelBody"></div>
+            </div>
+            <div class="composer-topline">
+              <button class="composer-tool" id="btnComposerAdd" title="添加文件、文件夹或图片">＋ 添加</button>
+              <button class="composer-tool composer-state" id="btnGoalMode" title="设置持续目标" aria-pressed="false">
+                <span class="state-dot"></span> 目标
+              </button>
+              <button class="composer-tool composer-state" id="btnPlanMode" title="开启后，下一条及后续消息会先生成计划" aria-pressed="false">
+                <span class="state-dot"></span> 计划
+              </button>
+              <button class="permission-trigger" id="btnPermission" title="切换权限模式">权限：请求批准</button>
+            </div>
+            <div class="context-chips" id="contextChips"></div>
             <div class="chat-input-wrap">
-              <button class="mic-btn" id="btnMic" title="语音输入">🎤</button>
-              <textarea id="chatInput" rows="1" placeholder="输入消息，或点 🎤 语音输入，Enter 发送…"></textarea>
+              <textarea id="chatInput" rows="1" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
               <button class="primary send" id="btnChatSend" title="发送">发送 ↑</button>
             </div>
-            <div class="chat-input-hint" id="chatHint">Enter 发送 · Shift+Enter 换行 · 🎤 语音输入</div>
+            <div class="chat-input-hint" id="chatHint">
+              <button id="btnCommandPalette" class="command-shortcut" title="命令面板 (Ctrl+K)">⌘K</button>
+              <span>Enter 发送 · Shift+Enter 换行</span>
+            </div>
           </div>
         </div>
+
+        <!-- 助手工具台：思考链路 + 电脑 / 浏览器 / 记忆 / 技能 -->
+        <aside class="chat-toolkit hidden" id="chatToolkit">
+          <div class="tk-head">
+            <div class="tk-title-wrap">
+              <span class="tk-title">助手工具台</span>
+              <span class="tk-status" id="capStatusLine">…</span>
+            </div>
+            <button id="btnTkClose" class="ghost small" title="收起工具台">✕</button>
+          </div>
+
+          <div class="tk-modes">
+            <button class="tk-mode active" data-tk-mode="think">🧠 思考</button>
+            <button class="tk-mode" data-tk-mode="computer">🖥 电脑</button>
+            <button class="tk-mode" data-tk-mode="browser">🌐 浏览器</button>
+            <button class="tk-mode" data-tk-mode="memory">记忆</button>
+            <button class="tk-mode" data-tk-mode="review">🔍 审阅</button>
+            <button class="tk-mode" data-tk-mode="workspace">🗂 工作区</button>
+            <button class="tk-mode" data-tk-mode="tasks">🚀 任务</button>
+            <button class="tk-mode" data-tk-mode="remote">🌐 远程</button>
+            <button class="tk-mode" data-tk-mode="skills">⚡ 技能</button>
+          </div>
+
+          <div class="tk-pane active" id="tk-pane-think">
+            <div class="tk-pane-head">
+              <span>思考链路</span>
+              <button id="btnCOTClear" class="ghost small">清空</button>
+            </div>
+            <div id="cotTrace" class="cot-trace">
+              <div class="cot-empty">开启「Think」后，助手会在这里展示每一步推理</div>
+            </div>
+            <div class="tk-tip">思考步骤会在对话过程中实时写入，完成后保留在当前会话。</div>
+          </div>
+
+          <div class="tk-pane" id="tk-pane-computer">
+            <div class="tk-pane-head"><span>电脑</span></div>
+            <div class="cap-section">
+              <div class="cap-row">
+                <label class="cap-field wide">目标窗口
+                  <select id="compWinSelect"><option value="">全屏</option></select>
+                </label>
+                <button id="compShotWin" class="primary small">截图所选</button>
+                <button id="compShotFull" class="small">全屏截图</button>
+                <button id="compRefresh" class="ghost small">刷新</button>
+                <label class="cap-switch" title="允许执行 PowerShell 命令">
+                  <input type="checkbox" id="compAllowShell" />
+                  <span>允许命令</span>
+                </label>
+              </div>
+              <div class="shot-stage" id="compShotStage">
+                <div class="shot-empty">截一张图，然后直接在图上点选坐标</div>
+              </div>
+              <div class="comp-coords">
+                <span>坐标 <b id="compXY">—</b></span>
+                <span class="muted" id="compShotName"></span>
+              </div>
+              <div class="cap-row">
+                <label class="cap-field">X <input id="compX" type="number" value="0" /></label>
+                <label class="cap-field">Y <input id="compY" type="number" value="0" /></label>
+                <button id="compMove" class="small">移动</button>
+                <button id="compClick" class="primary small">单击</button>
+                <button id="compDblClick" class="small">双击</button>
+                <button id="compRightClick" class="small">右键</button>
+                <button id="compScrollUp" class="small">上滚</button>
+                <button id="compScrollDown" class="small">下滚</button>
+              </div>
+              <div class="cap-row">
+                <label class="cap-field wide">输入文本 <input id="compType" placeholder="粘贴到当前焦点" /></label>
+                <button id="compTypeBtn" class="primary small">输入</button>
+                <label class="cap-field">按键
+                  <select id="compKey">
+                    <option value="">选择按键</option>
+                    <option>Enter</option><option>Tab</option><option>Escape</option>
+                    <option>Backspace</option><option>Delete</option>
+                    <option>ArrowUp</option><option>ArrowDown</option>
+                    <option>ArrowLeft</option><option>ArrowRight</option><option>F5</option>
+                  </select>
+                </label>
+                <button id="compKeyBtn" class="small">按键</button>
+              </div>
+              <div class="cap-row">
+                <label class="cap-field wide">运行命令 <input id="compCmd" placeholder="Get-Process | Select-Object -First 5" /></label>
+                <button id="compRun" class="small danger">运行</button>
+              </div>
+              <pre id="compOutput" class="computer-output"></pre>
+            </div>
+          </div>
+
+          <div class="tk-pane" id="tk-pane-browser">
+            <div class="tk-pane-head"><span>浏览器</span></div>
+            <div class="cap-section">
+              <div class="cap-row">
+                <label class="cap-field wide">网址 <input id="brOpenUrl" placeholder="https://www.baidu.com" /></label>
+                <button id="brStart" class="primary small">启动 / 打开</button>
+                <button id="brStop" class="ghost small">停止</button>
+                <span class="muted" id="brStatus">—</span>
+              </div>
+              <div class="cap-row">
+                <label class="cap-field wide">标签页
+                  <select id="brTabSelect"><option value="">未启动</option></select>
+                </label>
+                <button id="brSnapshot" class="small">页面快照</button>
+                <button id="brScreenshot" class="primary small">截图</button>
+                <button id="brCloseTab" class="ghost small">关闭标签</button>
+              </div>
+              <div class="cap-row">
+                <label class="cap-field wide">导航 <input id="brUrl" placeholder="当前标签跳转的网址" /></label>
+                <button id="brNav" class="small">导航</button>
+              </div>
+              <div class="cap-row">
+                <label class="cap-field wide">选择器 <input id="brSelector" placeholder="#id / .class" /></label>
+                <label class="cap-field wide">文本 / 输入 <input id="brText" placeholder="按钮文字或要输入的内容" /></label>
+                <button id="brClick" class="primary small">点击</button>
+                <button id="brTypeBtn" class="primary small">输入</button>
+                <button id="brKeyEnter" class="small">Enter</button>
+                <button id="brScrollUp" class="small">上滚</button>
+                <button id="brScrollDown" class="small">下滚</button>
+              </div>
+              <pre id="brSnapshotOut" class="computer-output"></pre>
+              <div class="shot-stage" id="brShotStage">
+                <div class="shot-empty">打开页面后点「截图」</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="tk-pane" id="tk-pane-memory">
+            <div class="tk-pane-head"><span>记忆</span></div>
+            <div class="cap-section">
+              <div class="cap-row">
+                <label class="cap-field wide">内容 <input id="memContent" placeholder="例如：我习惯每天早上先回邮件" /></label>
+                <label class="cap-field">类型
+                  <select id="memKind">
+                    <option value="fact">事实</option>
+                    <option value="preference">偏好</option>
+                    <option value="habit">习惯</option>
+                    <option value="event">事件</option>
+                    <option value="context">上下文</option>
+                  </select>
+                </label>
+                <label class="cap-field">重要度
+                  <select id="memImportance">
+                    <option value="1">1</option><option value="2" selected>2</option>
+                    <option value="3">3</option><option value="4">4</option><option value="5">5</option>
+                  </select>
+                </label>
+                <label class="cap-field">标签 <input id="memTags" placeholder="逗号分隔" /></label>
+                <button id="btnMemAdd" class="primary small">保存</button>
+              </div>
+              <div id="memStats" class="mem-stats muted">…</div>
+              <div class="cap-row">
+                <label class="cap-field wide">搜索 <input id="memSearch" placeholder="关键词" /></label>
+                <button id="memRecall" class="primary small">回忆</button>
+                <button id="memExtract" class="small">从对话提取</button>
+                <button id="memRefresh" class="ghost small">刷新</button>
+              </div>
+              <div id="memList" class="mem-list"></div>
+              <span class="muted" id="memStatus"></span>
+            </div>
+          </div>
+
+          <div class="tk-pane" id="tk-pane-review">
+            <div class="tk-pane-head">
+              <span>代码审阅</span>
+              <button id="btnReviewRun" class="primary small">审阅变更</button>
+            </div>
+            <div class="cap-row">
+              <label class="cap-field wide">对比分支（可选） <input id="reviewBase" placeholder="main / origin/main" /></label>
+              <button id="btnReviewRefresh" class="small">刷新 diff</button>
+            </div>
+            <div id="reviewStatus" class="muted">—</div>
+            <div id="reviewFiles" class="list"></div>
+            <pre id="reviewDiff" class="computer-output"></pre>
+            <pre id="reviewResult" class="computer-output"></pre>
+          </div>
+
+          <div class="tk-pane" id="tk-pane-workspace">
+            <div class="tk-pane-head">
+              <span>工作区</span>
+              <button id="btnWorktreeRefresh" class="small">刷新</button>
+            </div>
+            <div id="workspaceEnv" class="muted">—</div>
+            <div class="cap-row">
+              <label class="cap-field wide">新 worktree 路径 <input id="wtPath" placeholder="..\\dsh-worktree-1" /></label>
+              <label class="cap-field">分支 <input id="wtBranch" placeholder="可选" /></label>
+              <button id="btnWorktreeCreate" class="primary small">创建并绑定</button>
+            </div>
+            <div id="worktreeList" class="list"></div>
+            <div class="tk-pane-head">
+              <span>文件浏览</span>
+              <button id="btnWsRoot" class="small">根目录</button>
+            </div>
+            <div id="wsPath" class="muted">.</div>
+            <div id="wsList" class="list"></div>
+            <pre id="wsPreview" class="computer-output"></pre>
+            <textarea id="wsEditor" class="hidden" rows="10" placeholder="编辑文件内容…"></textarea>
+            <div class="cap-row">
+              <button id="btnWsEdit" class="small" disabled>编辑</button>
+              <button id="btnWsSave" class="primary small hidden">保存</button>
+            </div>
+            <div class="cap-row">
+              <button id="btnWorkspaceLocal" class="small">切回 Local</button>
+            </div>
+          </div>
+
+          <div class="tk-pane" id="tk-pane-tasks">
+            <div class="tk-pane-head">
+              <span>后台任务</span>
+              <button id="btnTasksRefresh" class="small">刷新</button>
+            </div>
+            <div class="cap-row">
+              <button class="small task-filter active" data-task-filter="all">全部</button>
+              <button class="small task-filter" data-task-filter="task">后台任务</button>
+              <button class="small task-filter" data-task-filter="subagent">子代理</button>
+            </div>
+            <div class="cap-row">
+              <label class="cap-field wide">任务描述 <input id="taskPrompt" placeholder="例如：总结本周未完成事项并给出计划" /></label>
+              <button id="btnTaskCreate" class="primary small">创建</button>
+            </div>
+            <div id="taskList" class="list"></div>
+          </div>
+
+          <div class="tk-pane" id="tk-pane-remote">
+            <div class="tk-pane-head">
+              <span>远程主机</span>
+              <button id="btnRemoteRefresh" class="small">刷新</button>
+            </div>
+            <div class="cap-row">
+              <label class="cap-field">名称 <input id="remoteName" placeholder="my-mac" /></label>
+              <label class="cap-field wide">Base URL <input id="remoteUrl" placeholder="http://192.168.1.10:3000" /></label>
+              <label class="cap-field wide">Token <input id="remoteToken" type="password" /></label>
+              <button id="btnRemoteSave" class="primary small">保存</button>
+            </div>
+            <div class="cap-row">
+              <label class="cap-field wide">远程任务 <input id="remotePrompt" placeholder="在远程主机执行的任务" /></label>
+              <label class="cap-field">目标主机 <select id="remoteHostSelect"></select></label>
+              <button id="btnRemoteRun" class="primary small">远程运行</button>
+              <button id="btnRemoteHandoff" class="small">Handoff 当前会话</button>
+            </div>
+            <div id="remoteList" class="list"></div>
+            <pre id="remoteOutput" class="computer-output"></pre>
+          </div>
+
+          <div class="tk-pane" id="tk-pane-skills">
+            <div class="tk-pane-head"><span>技能</span></div>
+            <div class="cap-section">
+              <div class="cap-row">
+                <button id="btnSkillNew" class="primary small">新建技能</button>
+                <label class="cap-field wide">GitHub 安装 <input id="skillInstallUrl" placeholder="https://github.com/user/skill-repo" /></label>
+                <button id="btnSkillInstall" class="small">安装</button>
+                <span class="muted" id="skillStatus"></span>
+              </div>
+              <div id="skillList" class="skill-list"></div>
+              <div id="skillEditorTitle" class="cap-kicker">技能编辑器</div>
+              <div class="cap-editor">
+                <div class="cap-row">
+                  <label class="cap-field wide">名称 <input id="skillName" placeholder="my-skill" /></label>
+                  <label class="cap-field wide">描述 <input id="skillDesc" placeholder="这个技能做什么" /></label>
+                  <label class="cap-field wide">适用场景 <input id="skillWhen" placeholder="何时使用" /></label>
+                </div>
+                <label class="cap-field">SKILL.md 内容
+                  <textarea id="skillContent" rows="6" placeholder="# 技能标题&#10;&#10;1. 第一步"></textarea>
+                </label>
+                <div class="cap-row">
+                  <button id="btnSkillSave" class="primary small">保存技能</button>
+                  <button id="btnSkillDelete" class="danger small">删除</button>
+                  <button id="btnSkillUse" class="small">发到对话使用</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
 
         <!-- PPT 实时预览侧栏（有草稿时自动展开） -->
         <aside class="ppt-preview hidden" id="pptPreview">
@@ -313,7 +670,7 @@
       <!-- LLM 配置 -->
       <section class="panel" id="panel-ai">
         <div class="row">
-          <h2>⚙️ LLM 配置</h2>
+          <h2>模型与系统</h2>
           <span class="muted" id="aiStatus">—</span>
         </div>
 
@@ -331,13 +688,21 @@
               <label>模型
                 <input id="cfgModel" placeholder="deepseek-chat" />
               </label>
+              <label>推理强度
+                <select id="cfgReasoning">
+                  <option value="">默认</option>
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                </select>
+              </label>
               <label>API Key
                 <input id="cfgApiKey" type="password" placeholder="留空保持不变" autocomplete="off" />
               </label>
             </div>
             <div class="actions">
               <button class="primary" id="btnCfgSave">保存</button>
-              <button id="btnCfgTest">🔌 测试连接</button>
+              <button id="btnCfgTest">测试连接</button>
               <span class="muted" id="cfgStatus"></span>
             </div>
           </div>
@@ -347,7 +712,7 @@
         <!-- Token 用量统计 -->
         <div class="card" id="usageCard">
           <div class="row">
-            <h3>📊 Token 用量</h3>
+            <h3>Token 用量</h3>
             <div class="usage-range">
               <button class="usage-range-btn active" data-days="7">7天</button>
               <button class="usage-range-btn" data-days="30">30天</button>
@@ -371,10 +736,16 @@
           </div>
         </div>
 
+        <details class="advanced-settings">
+          <summary>
+            <span>高级设置</span>
+            <small>对接、诊断、规则、MCP 与备份</small>
+          </summary>
+
         <!-- 对接配置：飞书 / 企业微信 / 钉钉 -->
         <div class="card">
           <div class="row">
-            <h3>🔗 对接配置</h3>
+            <h3>对接配置</h3>
             <span class="muted">将提醒 / 日报推送到团队 IM</span>
           </div>
 
@@ -403,14 +774,80 @@
           </form>
         </div>
 
+        <!-- 系统诊断 -->
+        <div class="card">
+          <div class="row">
+            <h3>系统诊断</h3>
+            <button id="btnDiagnostics" class="small">刷新</button>
+          </div>
+          <pre id="diagnosticsOut" class="computer-output">点击刷新查看 LLM / 沙箱 / 电脑 / 浏览器 / MCP / 记忆 / 任务状态</pre>
+        </div>
+
+        <!-- 项目规则 AGENTS.md -->
+        <div class="card">
+          <div class="row">
+            <h3>项目规则 AGENTS.md</h3>
+            <span class="muted" id="rulesStatus">—</span>
+          </div>
+          <p class="muted">保存后会注入 Agent 的 system prompt，用于项目级约定、命令规范、代码风格等。</p>
+          <div class="cap-row">
+            <label class="cap-field wide">规则文件 <select id="rulesFile"></select></label>
+            <label class="cap-field wide">新文件路径 <input id="rulesPath" placeholder="src/AGENTS.md" /></label>
+            <button id="btnRulesNew" class="small">新建/切换</button>
+          </div>
+          <textarea id="rulesContent" rows="8" placeholder="# 项目规则&#10;&#10;- 修改前先读 AGENTS.md&#10;- 提交前必须跑 node scripts/test-codex-modules.js"></textarea>
+          <div class="actions">
+            <button class="primary small" id="btnRulesSave">保存规则</button>
+          </div>
+        </div>
+
+        <!-- MCP servers -->
+        <div class="card">
+          <div class="row">
+            <h3>MCP Servers</h3>
+            <span class="muted" id="mcpStatus">—</span>
+          </div>
+          <div id="mcpList" class="list"><div class="muted">加载中…</div></div>
+          <form id="mcpForm" class="form" autocomplete="off">
+            <div class="grid">
+              <label>名称 <input id="mcpName" placeholder="my-server" /></label>
+              <label>传输方式
+                <select id="mcpTransport">
+                  <option value="stdio">stdio</option>
+                  <option value="http">http</option>
+                </select>
+              </label>
+              <label>命令（stdio） <input id="mcpCommand" placeholder="npx" /></label>
+              <label>参数（stdio，空格分隔） <input id="mcpArgs" placeholder="-y @modelcontextprotocol/server-filesystem ." /></label>
+              <label>URL（http） <input id="mcpUrl" placeholder="https://example.com/mcp" /></label>
+              <label>Headers（JSON） <input id="mcpHeaders" placeholder='{"Authorization":"Bearer ..."}' /></label>
+              <label>认证
+                <select id="mcpAuth">
+                  <option value="none">无</option>
+                  <option value="oauth">OAuth</option>
+                </select>
+              </label>
+              <label>Authorization URL <input id="mcpAuthUrl" placeholder="https://example.com/oauth/authorize" /></label>
+              <label>Token URL <input id="mcpTokenUrl" placeholder="https://example.com/oauth/token" /></label>
+              <label>Client ID <input id="mcpClientId" /></label>
+              <label>Client Secret <input id="mcpClientSecret" type="password" /></label>
+              <label>Scopes <input id="mcpScopes" placeholder="read write" /></label>
+            </div>
+            <div class="actions">
+              <button class="primary small" id="btnMcpSave">保存 MCP</button>
+              <span class="muted" id="mcpFormStatus"></span>
+            </div>
+          </form>
+        </div>
+
         <!-- 备份与恢复 -->
         <div class="card">
           <h3>数据备份</h3>
           <div class="actions">
-            <button id="btnExport">⬇️ 导出全部数据</button>
+            <button id="btnExport">导出全部数据</button>
             <label class="file-btn">
               <input type="file" id="importFile" accept="application/json" hidden />
-              <span>📂 选择文件导入</span>
+              <span>选择文件导入</span>
             </label>
             <select id="importMode">
               <option value="replace">覆盖</option>
@@ -420,11 +857,11 @@
           </div>
           <small class="hint" id="backupStats">—</small>
         </div>
+        </details>
       </section>
     </main>
 
-    <script defer src="app.js?v=29"></script>
-    <link rel="stylesheet" href="styles.css?v=16" />
+<script defer src="app.js?v=89"></script>
     <script>
       // ?nosw=1 临时禁用 Service Worker（用于诊断缓存问题）
       if (!location.search.includes('nosw=1') && 'serviceWorker' in navigator) {
@@ -442,6 +879,13 @@
       }
     </script>
     <!-- PWA 安装提示 -->
+    <div class="command-palette hidden" id="commandPalette">
+      <div class="cp-card">
+        <input id="cpInput" placeholder="输入命令…" autocomplete="off" />
+        <div id="cpList" class="cp-list"></div>
+      </div>
+    </div>
+
     <div id="installBanner" class="install-banner hidden">
       <span>📲 把 WorkBuddy 安装到桌面</span>
       <button id="btnInstall" class="primary">安装</button>

@@ -160,6 +160,32 @@ function migrate() {
     );
     CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, id);
 
+    -- ===== v4：长期记忆模块 =====
+    CREATE TABLE IF NOT EXISTS memory_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'fact',     -- fact / preference / event / context / habit
+      content TEXT NOT NULL,
+      tags TEXT NOT NULL DEFAULT '[]',
+      source TEXT DEFAULT 'manual',
+      importance INTEGER DEFAULT 1,
+      pinned INTEGER DEFAULT 0,
+      expires_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_accessed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_user_time ON memory_items(user_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_memory_user_kind ON memory_items(user_id, kind);
+
+    CREATE TABLE IF NOT EXISTS memory_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_events_user ON memory_events(user_id, created_at);
 
     -- 给所有数据表加 user_id 列（如不存在），用于多用户隔离
   `);
@@ -170,6 +196,11 @@ function migrate() {
   addColumnIfMissing('reminders', 'user_id', 'INTEGER');
   addColumnIfMissing('settings', 'user_id', 'INTEGER');
   addColumnIfMissing('todos', 'recur_rule', 'TEXT');
+  addColumnIfMissing('chat_sessions', 'workspace_mode', "TEXT DEFAULT 'local'");
+  addColumnIfMissing('chat_sessions', 'worktree_path', 'TEXT');
+  addColumnIfMissing('chat_sessions', 'worktree_branch', 'TEXT');
+  addColumnIfMissing('chat_sessions', 'project', "TEXT DEFAULT 'WorkBuddy'");
+  addColumnIfMissing('chat_messages', 'meta', "TEXT DEFAULT ''");
 
   // 多用户复合索引
   db.run('CREATE INDEX IF NOT EXISTS idx_todos_user_status_due ON todos(user_id, status, due_at)');
@@ -367,6 +398,7 @@ module.exports = {
   insert,
   update,
   remove,
+  query,
   getSetting,
   setSetting,
   nowIso,

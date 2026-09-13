@@ -1,0 +1,36 @@
+{
+  "name": "workbuddy",
+  "version": "0.1.0",
+  "description": "本地智能助手：Codex 式 Agent、工具、沙箱、技能与后台任务",
+  "author": {
+    "name": "WorkBuddy"
+  },
+  "license": "MIT",
+  "keywords": [
+    "assistant",
+    "agent",
+    "mcp",
+    "browser-use",
+    "computer-use",
+    "memory"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "WorkBuddy",
+    "shortDescription": "Codex 式本地智能助手",
+    "longDescription": "WorkBuddy 复刻 Codex 桌面端核心能力：迭代式工具循环、审批与沙箱、记忆、技能、MCP、浏览器/电脑控制、后台任务、Review 与 Worktree handoff。",
+    "developerName": "WorkBuddy",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "brandColor": "#0F766E",
+    "defaultPrompt": [
+      "总结今天的待办和日程，给出优先级建议",
+      "审阅当前未提交的变更并列出风险",
+      "打开浏览器搜索并整理资料"
+    ]
+  }
+}

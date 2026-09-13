@@ -57,6 +57,10 @@ function resolveTimeout() {
   return Number.isFinite(n) ? n : 30000;
 }
 
+function resolveReasoningEffort() {
+  return db.getSetting('LLM_REASONING_EFFORT') || config.llm.reasoningEffort || '';
+}
+
 // TCP 连接单独 timeout：比 LLM 整体 timeout 更短（默认 5s）
 // 避免连不上时等 30 秒
 function resolveConnectTimeout() {
@@ -108,6 +112,7 @@ async function callOnce(model, messages, opts) {
         messages,
         temperature: opts.temperature ?? 0.5,
         max_tokens: opts.max_tokens ?? 800,
+        ...((opts.reasoningEffort || resolveReasoningEffort()) ? { reasoning_effort: opts.reasoningEffort || resolveReasoningEffort() } : {}),
       },
       { signal: controller.signal }
     );
@@ -159,7 +164,7 @@ async function chat(messages, opts = {}) {
   if (!apiKey) {
     return { ok: false, error: 'LLM 未配置：请在 .env 或 Web 设置里填 LLM_API_KEY' };
   }
-  const { model } = resolveConfig();
+  const model = opts.model || resolveConfig().model;
   let lastErr = null;
 
   for (let attempt = 0; attempt <= MAX_RETRIES(); attempt++) {
@@ -206,7 +211,7 @@ async function chatStream(messages, opts, onDelta) {
   }
   const c = getClient();
   if (!c) return { ok: false, error: 'LLM client unavailable' };
-  const { model } = resolveConfig();
+  const model = (opts && opts.model) || resolveConfig().model;
 
   // 流式也走 429 等待 10s
   for (let attempt = 0; attempt <= MAX_RETRIES(); attempt++) {
@@ -223,6 +228,7 @@ async function chatStream(messages, opts, onDelta) {
           max_tokens: opts.max_tokens ?? 800,
           stream: true,
           stream_options: { include_usage: true },
+          ...((opts.reasoningEffort || resolveReasoningEffort()) ? { reasoning_effort: opts.reasoningEffort || resolveReasoningEffort() } : {}),
         },
         { signal: controller.signal }
       );
@@ -305,6 +311,7 @@ function getConfigView() {
   return {
     baseURL,
     model,
+    reasoningEffort: resolveReasoningEffort(),
     configured: !!apiKey,
     api_key_preview: apiKey ? apiKey.slice(0, 4) + '****' + apiKey.slice(-4) : null,
     source: {
@@ -320,12 +327,12 @@ function getConfigView() {
  */
 function updateConfig(patch) {
   if (!patch || typeof patch !== 'object') throw new Error('invalid patch');
-  const map = { baseURL: 'LLM_BASE_URL', apiKey: 'LLM_API_KEY', model: 'LLM_MODEL' };
+  const map = { baseURL: 'LLM_BASE_URL', apiKey: 'LLM_API_KEY', model: 'LLM_MODEL', reasoningEffort: 'LLM_REASONING_EFFORT' };
   for (const [k, v] of Object.entries(patch)) {
     const key = map[k];
     if (!key) continue;
     if (typeof v !== 'string') continue;
-    if (v.length === 0) continue; // 留空忽略（不支持删除）
+    if (v.length === 0 && k !== 'reasoningEffort') continue; // 留空忽略（推理强度可清空）
     db.setSetting(key, v);
   }
   client = null;
@@ -342,5 +349,6 @@ module.exports = {
   getConfigView,
   updateConfig,
   resolveConfig,
+  resolveReasoningEffort,
   recordUsage,
 };

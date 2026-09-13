@@ -88,6 +88,21 @@ async function main() {
   app.use('/api/integrations', require('./src/routes/integrations'));
   app.use('/api/ppt', require('./src/routes/ppt'));
   app.use('/api/chathistory', require('./src/routes/chathistory'));
+  app.use('/api/memory', require('./src/routes/memory'));
+  app.use('/api/skills', require('./src/routes/skills'));
+  app.use('/api/computer', require('./src/routes/computer'));
+  app.use('/api/browser', require('./src/routes/browser'));
+  app.use('/api/media', require('./src/routes/media'));
+  app.use('/api/mcp', require('./src/routes/mcp'));
+  app.use('/api/automations', require('./src/routes/automations'));
+  app.use('/api/review', require('./src/routes/review'));
+  app.use('/api/worktrees', require('./src/routes/worktrees'));
+  app.use('/api/rules', require('./src/routes/rules'));
+  app.use('/api/files', require('./src/routes/files'));
+  app.use('/api/agent', require('./src/routes/agent'));
+  app.use('/api/tasks', require('./src/routes/tasks'));
+  app.use('/api/remote', require('./src/routes/remote'));
+  app.use('/api/diagnostics', require('./src/routes/diagnostics'));
   app.use('/api/prd', require('./src/routes/prd'));
   app.use('/api/backup', require('./src/routes/backup'));
 
@@ -97,6 +112,7 @@ async function main() {
   app.use('/api', (req, res) => res.status(404).json({ error: 'not found' }));
 
   scheduler.loadAll();
+  require('./src/services/automations').loadAll();
   // 重复任务：每小时检查一次（完成的重复待办自动生成新实例）
   cron.schedule('0 * * * *', () => scheduler.checkRecurring());
 
@@ -132,6 +148,9 @@ async function main() {
   function shutdown() {
     logger.info('shutting down...');
     desktop.stopTray();
+    try { require('./src/services/browser').stop(); } catch (_) {}
+    try { require('./src/services/mcp').disconnectAll(); } catch (_) {}
+    try { require('./src/services/automations').shutdown(); } catch (_) {}
     scheduler.shutdown();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000).unref();

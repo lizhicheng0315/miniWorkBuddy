@@ -19,6 +19,13 @@ dist/
 # 本地缓存
 .npm-cache/
 .pnpm-store/
+.tools/
+.playwright/
+.playwright-cli/
+.edge-profile/
+
+# 本地预览与测试产物
+output/
 
 # 证书与密钥
 certs/

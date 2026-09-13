@@ -214,6 +214,30 @@ function offlineClassify(message) {
     }
   }
 
+  // ===== 长期记忆 =====
+  if ((m = text.match(/^(?:记住|记下|记一下|以后要|我的偏好是|我喜欢|我不喜欢|我习惯|别忘了我|记住我)/))) {
+    const body = text.replace(/^(?:记住|记下|记一下|以后要记住|记住我)\s*[:：]?\s*/, '').replace(/^(我的偏好是|我喜欢|我不喜欢|我习惯)\s*/, '').trim();
+    return { intent: 'memory_remember', confidence: 0.92, title: body || text };
+  }
+  if (/(?:回忆|帮我回忆|我的(?:偏好|习惯|资料|信息|事实)|记得什么|都记得什么|记忆库)/.test(text)) {
+    return { intent: 'memory_recall', confidence: 0.88 };
+  }
+
+  // ===== Computer / Browser Use（脱机快速通道）=====
+  if (/(?:截屏|截图|看(?:一下)?电脑屏幕|屏幕上有|电脑上现在)/.test(text)) {
+    return { intent: 'computer_screenshot', confidence: 0.9 };
+  }
+  if (/(?:打开浏览器|打开网页|上百度|访问网址|在浏览器里打开)/.test(text)) {
+    let query = text.replace(/(?:打开浏览器|打开网页|在浏览器里打开|上百度)\s*[:：]?\s*/, '').trim();
+    let url = query;
+    if (query && !/^https?:\/\//i.test(query)) {
+      url = 'https://www.baidu.com/s?wd=' + encodeURIComponent(query);
+    } else if (!query) {
+      url = 'https://www.baidu.com';
+    }
+    return { intent: 'browser_open', confidence: 0.88, url };
+  }
+
   // ===== 默认 =====
   return { intent: 'create_todo', confidence: 0.5, title: text };
 }
@@ -228,6 +252,9 @@ const INTENT_SCHEMA = {
         'create_reminder', 'query_reminder', 'delete_reminder', 'update_reminder',
         'breakdown', 'daily_report', 'weekly_report', 'monthly_review', 'summarize',
         'web_search',
+        'memory_remember', 'memory_recall', 'memory_forget',
+        'computer_screenshot', 'computer_mouse', 'computer_type', 'computer_key',
+        'browser_open', 'browser_navigate', 'browser_snapshot', 'browser_screenshot',
         'chat', 'config', 'unknown',
       ],
     },
@@ -260,6 +287,10 @@ const INTENT_SYSTEM = `你是一个意图分类器。分析用户输入并返回
 - breakdown: 拆解任务。"帮我拆解X"
 - daily_report / weekly_report / monthly_review / summarize
 - web_search: 用户想查实时/外部信息。"查一下X"/"搜索X"/"X是什么"/"X新闻"/"X天气"/"X怎么样"。query 字段填要搜索的内容
+- memory_remember: "记住X"/"我喜欢X"/"我的偏好是X"，title 填要记住的内容
+- memory_recall: 用户想回忆长期记忆。"我记得什么"/"我的偏好"
+- computer_screenshot / computer_mouse / computer_type / computer_key: 操作本机电脑
+- browser_open / browser_navigate / browser_snapshot / browser_screenshot: 操作浏览器
 - chat: 闲聊或问答。"你好"/"你能做什么"
 
 规则：
@@ -270,6 +301,8 @@ const INTENT_SYSTEM = `你是一个意图分类器。分析用户输入并返回
 5. confidence 0-1
 6. 涉及实时信息/知识查询（新闻、天气、股价、定义、事实、人物、事件）→ web_search，query=完整搜索词
 7. 只有管理本地待办/日程/提醒才是 create_*/query_*；其他知识类一律 web_search 或 chat
+8. "记住/我喜欢/我习惯/我的偏好" → memory_remember；"我(都)记得什么/回忆" → memory_recall
+9. 截屏/看屏幕 → computer_screenshot；打开网页/浏览器 → browser_open
 
 只返回 JSON。`;
 
@@ -282,6 +315,9 @@ const KNOWN_INTENTS = new Set([
   'create_reminder', 'query_reminder', 'delete_reminder', 'update_reminder',
   'breakdown', 'daily_report', 'weekly_report', 'monthly_review', 'summarize',
   'web_search', 'chat', 'config', 'unknown',
+  'memory_remember', 'memory_recall', 'memory_forget',
+  'computer_screenshot', 'computer_mouse', 'computer_type', 'computer_key',
+  'browser_open', 'browser_navigate', 'browser_snapshot', 'browser_screenshot',
 ]);
 
 /**
@@ -323,7 +359,7 @@ async function classifyIntent(message, userId) {
       model: cfg.model,
       messages: [
         { role: 'system', content: INTENT_SYSTEM },
-        { role: 'user', content: message },
+        { role: 'user', content: buildUserContent(message, opts.images) },
       ],
       temperature: 0.1,
       max_tokens: 300,
@@ -880,6 +916,489 @@ const TOOLS = {
       return await TOOLS.prd_export.handler({ userId });
     },
   },
+
+  // ===== Computer Use（本地电脑操作） =====
+  computer_list_windows: {
+    description: '列出当前电脑的可见窗口',
+    async handler() {
+      const computer = require('./computer');
+      const r = await computer.listWindows();
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      const top = (r.windows || []).slice(0, 15);
+      const summary = top.length
+        ? `🖥️ 当前共有 ${r.windows.length} 个可见窗口：\n` + top.map((w, i) => `${i + 1}. ${w.title}（${w.process} @ ${w.width}×${w.height}，句柄 ${w.handle}）`).join('\n')
+        : '没有检测到可见窗口';
+      return { data: r.windows, summary, steps: [{ icon: '🖥️', text: `枚举到 ${r.windows.length} 个窗口` }] };
+    },
+  },
+  computer_screenshot: {
+    description: '截取电脑全屏或指定窗口画面（返回可点击的截图）',
+    async handler({ intent }) {
+      const computer = require('./computer');
+      const r = await computer.screenshot({ windowId: intent.windowId || null });
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      return {
+        data: r,
+        summary: `📸 截图完成（${r.width}×${r.height}）\n\n[📷 查看截图](${r.url})\n（截图存放在 data/screenshots/）`,
+        steps: [{ icon: '📸', text: `已截屏 ${r.width}×${r.height}` }],
+      };
+    },
+  },
+  computer_mouse: {
+    description: '移动鼠标或点击指定坐标（x, y, action: move/click/dblclick/rightclick）',
+    async handler({ intent }) {
+      const computer = require('./computer');
+      const r = await computer.mouse(intent.x, intent.y, intent.action || 'click');
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      return { data: r, summary: `🖱️ 已${r.action === 'move' ? '移动鼠标到' : '点击'} (${r.x}, ${r.y})`, steps: [{ icon: '🖱️', text: `鼠标 ${r.action} (${r.x}, ${r.y})` }] };
+    },
+  },
+  computer_type: {
+    description: '向当前焦点输入文本（支持中文，通过剪贴板粘贴）',
+    async handler({ intent }) {
+      const computer = require('./computer');
+      const r = await computer.typeText(intent.text || intent.content || '');
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      return { data: r, summary: `⌨️ 已输入 ${r.chars} 个字符`, steps: [{ icon: '⌨️', text: `输入 ${r.chars} 字符` }] };
+    },
+  },
+  computer_key: {
+    description: '发送键盘按键（key: Enter/Tab/Escape/ArrowUp/F5 等，modifiers 可选）',
+    async handler({ intent }) {
+      const computer = require('./computer');
+      const r = await computer.pressKey(intent.key, intent.modifiers);
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      return { data: r, summary: `⌨️ 已按键 ${r.key}`, steps: [{ icon: '⌨️', text: `按键 ${r.key}` }] };
+    },
+  },
+  computer_scroll: {
+    description: '鼠标滚轮滚动（dy>0 向下）',
+    async handler({ intent }) {
+      const computer = require('./computer');
+      const r = await computer.scroll(intent.dx, intent.dy);
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      return { data: r, summary: `🔄 已滚动 ${r.delta > 0 ? '向下' : '向上'}（${Math.abs(r.delta)}）`, steps: [{ icon: '🔄', text: '滚轮滚动' }] };
+    },
+  },
+  computer_launch: {
+    description: '启动一个程序（需要开启允许执行系统命令；app 为程序路径或应用名）',
+    async handler({ intent, fullAccess }) {
+      const computer = require('./computer');
+      const sandbox = require('./sandbox');
+      if (!fullAccess && !sandbox.allowShell()) return { summary: '⚠️ 沙箱策略：先开启「允许命令」才能启动程序' };
+      const r = await computer.launch(intent.app || intent.title, intent.args, { fullAccess });
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      return { data: r, summary: `🚀 已启动：${r.app}`, steps: [{ icon: '🚀', text: `启动 ${r.app}` }] };
+    },
+  },
+  computer_run: {
+    description: '在电脑上执行 PowerShell 命令（需要开启允许执行系统命令，危险）',
+    async handler({ intent, userId, fullAccess }) {
+      const sandbox = require('./sandbox');
+      const r = await sandbox.runCommand(userId, intent.command || intent.title || '', { fullAccess });
+      if (!r.ok) return { summary: `⚠️ ${r.error || '沙箱拒绝执行'}` };
+      const out = (r.stdout || '').slice(0, 1500) || '(无输出)';
+      return { data: r, summary: `⚙️ 命令已执行（exit ${r.code}）\n\n${out}`, steps: [{ icon: '⚙️', text: '执行 PowerShell 命令' }] };
+    },
+  },
+
+  // ===== Browser Use（浏览器控制） =====
+  browser_start: {
+    description: '启动受控浏览器（可带 url 打开初始页面）',
+    async handler({ intent }) {
+      const browser = require('./browser');
+      const r = await browser.start({ url: intent.url || undefined });
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      const tab = r.tabs && r.tabs[0];
+      return {
+        data: r,
+        summary: `🌐 浏览器已启动（${r.tabs.length} 个标签）${tab ? '\n当前：' + (tab.title || tab.url) : ''}`,
+        steps: [{ icon: '🌐', text: '启动受控浏览器' }],
+      };
+    },
+  },
+  browser_open: {
+    description: '在受控浏览器打开网址（google/baidu/任意 https 地址）',
+    async handler({ intent }) {
+      const browser = require('./browser');
+      const url = intent.url || String(intent.title || '').replace(/^(帮我|请|打开|访问)\s*/, '').trim();
+      if (!url) return { summary: '⚠️ 请提供要打开的网址，例如：打开 https://openai.com' };
+      const full = /^https?:\/\//i.test(url) ? url : 'https://' + url;
+      const r = await browser.open(full);
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      const tab = r.tab || {};
+      return { data: r.tabs || r.tab, summary: `🌐 已打开：${tab.url || full}`, steps: [{ icon: '🌐', text: `打开 ${full}` }] };
+    },
+  },
+  browser_navigate: {
+    description: '让受控浏览器当前标签导航到新网址',
+    async handler({ intent }) {
+      const browser = require('./browser');
+      const r = await browser.navigate(intent.tabId, intent.url);
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      return { data: r, summary: `🧭 已导航到：${r.url}（${r.title || ''}）`, steps: [{ icon: '🧭', text: `导航到 ${intent.url}` }] };
+    },
+  },
+  browser_snapshot: {
+    description: '读取受控浏览器当前页面的文本快照（标题/链接/按钮/正文）',
+    async handler({ intent }) {
+      const browser = require('./browser');
+      const r = await browser.snapshot(intent.tabId);
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      return {
+        data: r,
+        summary: '🌐 页面快照：\n\n' + r.render.slice(0, 2500),
+        steps: [{ icon: '🌐', text: `读取 ${r.title || r.url} 的快照` }],
+      };
+    },
+  },
+  browser_screenshot: {
+    description: '截取受控浏览器当前标签页画面',
+    async handler({ intent }) {
+      const browser = require('./browser');
+      const r = await browser.screenshot(intent.tabId);
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      return {
+        data: r,
+        summary: `📸 浏览器截图完成（${Math.round(r.bytes / 1024)} KB）\n\n[📷 查看截图](${r.url})`,
+        steps: [{ icon: '📸', text: '浏览器页面截图' }],
+      };
+    },
+  },
+  browser_click: {
+    description: '点击受控浏览器里的元素（selector 或 text 或 x/y 坐标）',
+    async handler({ intent }) {
+      const browser = require('./browser');
+      const r = await browser.click(intent.tabId, {
+        selector: intent.selector || '',
+        text: intent.text || intent.title || '',
+        x: intent.x,
+        y: intent.y,
+      });
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      const p = r.point || {};
+      return { data: r, summary: `🖱️ 已点击 [${Math.round(p.x)}, ${Math.round(p.y)}]${p.text ? '「' + p.text + '」' : ''}`, steps: [{ icon: '🖱️', text: '浏览器点击' }] };
+    },
+  },
+  browser_type: {
+    description: '在受控浏览器输入文本（selector 可选，enter=true 时回车）',
+    async handler({ intent }) {
+      const browser = require('./browser');
+      const r = await browser.type(intent.tabId, {
+        selector: intent.selector || '', text: intent.text || '', enter: !!intent.enter,
+      });
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      return { data: r, summary: `⌨️ 已输入 ${r.chars} 字符${r.enter ? ' 并回车' : ''}`, steps: [{ icon: '⌨️', text: '浏览器输入' }] };
+    },
+  },
+  browser_key: {
+    description: '向受控浏览器发送按键（Enter/Escape/Tab/ArrowDown 等）',
+    async handler({ intent }) {
+      const browser = require('./browser');
+      const r = await browser.key(intent.tabId, intent.key);
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      return { data: r, summary: `⌨️ 已发送 ${r.key}`, steps: [{ icon: '⌨️', text: `浏览器按键 ${r.key}` }] };
+    },
+  },
+  browser_scroll: {
+    description: '滚动受控浏览器页面',
+    async handler({ intent }) {
+      const browser = require('./browser');
+      const r = await browser.scroll(intent.tabId, intent.dx, intent.dy);
+      return { data: r, summary: `🔄 已滚动到 (${r.x || 0}, ${r.y || 0})`, steps: [{ icon: '🔄', text: '浏览器滚动' }] };
+    },
+  },
+  browser_close: {
+    description: '关闭受控浏览器的一个标签页',
+    async handler({ intent }) {
+      const browser = require('./browser');
+      const r = await browser.closeTab(intent.tabId);
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      return { data: r, summary: `🗑 已关闭标签，剩余 ${r.tabs.length} 个`, steps: [{ icon: '🗑', text: '关闭浏览器标签' }] };
+    },
+  },
+
+  // ===== 长期记忆 =====
+  memory_remember: {
+    description: '把一条用户事实/偏好/习惯写入长期记忆',
+    async handler({ intent, userId, message }) {
+      const memory = require('./memory');
+      const content = (intent.content || intent.title || message.replace(/^(记住|记一下|记下|以后要记住)\s*[:：]?\s*/, '')).trim();
+      if (!content) return { summary: '⚠️ 请告诉我要记住什么' };
+      const item = memory.create(userId, {
+        kind: /(喜欢|不喜欢|偏好|习惯|讨厌)/.test(content) ? 'preference' : 'fact',
+        content,
+        tags: intent.tags || [],
+        importance: 2,
+        source: 'chat',
+      });
+      return { data: item, summary: `🧠 已记住：${content}`, steps: [{ icon: '🧠', text: `写入记忆：${content.slice(0, 40)}` }] };
+    },
+  },
+  memory_recall: {
+    description: '从长期记忆里回忆与用户问题相关的信息',
+    async handler({ intent, userId, message }) {
+      const memory = require('./memory');
+      const query = intent.query || intent.title || message;
+      const items = memory.recall(userId, query, 8);
+      if (!items.length) return { summary: '🧠 目前没有与「' + String(query).slice(0, 30) + '」相关的记忆', steps: [] };
+      const summary = '🧠 找到 ' + items.length + ' 条相关记忆：\n\n' +
+        items.map((it, i) => `${i + 1}. [${it.kind}${it.importance >= 3 ? '★' : ''}] ${it.content}${it.tags.length ? '（' + it.tags.join(',') + '）' : ''}`).join('\n');
+      return { data: items, summary, steps: [{ icon: '🧠', text: `召回 ${items.length} 条记忆` }] };
+    },
+  },
+  memory_forget: {
+    description: '删除一条长期记忆（按记忆 ID 或内容关键词）',
+    async handler({ intent, userId }) {
+      const memory = require('./memory');
+      if (intent.id) {
+        if (!memory.remove(userId, intent.id)) return { summary: '⚠️ 记忆不存在' };
+        return { summary: `🗑 已删除记忆 #${intent.id}`, steps: [{ icon: '🗑', text: `删除记忆 #${intent.id}` }] };
+      }
+      const q = intent.content || intent.title || '';
+      const list = memory.list(userId, { q, limit: 1 });
+      if (!list.length) return { summary: '⚠️ 没找到要删除的记忆' };
+      memory.remove(userId, list[0].id);
+      return { summary: `🗑 已删除记忆：${list[0].content.slice(0, 60)}`, steps: [{ icon: '🗑', text: '删除匹配记忆' }] };
+    },
+  },
+
+  // ===== 沙箱文件/命令（仿 Codex exec policy）=====
+  sandbox_read_file: {
+    description: '在工作区内读取一个文件（path 填相对路径）',
+    async handler({ intent, userId, fullAccess }) {
+      const sandbox = require('./sandbox');
+      try {
+        const r = sandbox.readFile(userId, intent.path || intent.file || intent.title, { fullAccess });
+        const preview = r.content.slice(0, 1200);
+        return {
+          data: r,
+          summary: `📄 已读取 ${r.path}（${r.bytes} 字节${r.truncated ? '，已截断' : ''}）\n\n${preview}`,
+          steps: [{ icon: '📄', text: `读取文件 ${r.path}` }],
+        };
+      } catch (e) {
+        return { summary: '⛔ 沙箱拒绝：' + e.message };
+      }
+    },
+  },
+  sandbox_write_file: {
+    description: '在工作区内写入/覆盖文件（path 相对路径，content 为完整内容）',
+    async handler({ intent, userId, fullAccess }) {
+      const sandbox = require('./sandbox');
+      if (!intent.path && !intent.file) return { summary: '⚠️ 请提供 path' };
+      try {
+        const r = sandbox.writeFile(userId, intent.path || intent.file, intent.content || '', { fullAccess });
+        return {
+          data: r,
+          summary: `📝 已写入 ${r.path}（${r.bytes} 字节，沙箱 workspace-write）`,
+          steps: [{ icon: '📝', text: `写入文件 ${r.path}` }],
+        };
+      } catch (e) {
+        return { summary: '⛔ 沙箱拒绝：' + e.message };
+      }
+    },
+  },
+  sandbox_list_dir: {
+    description: '列出工作区内目录内容（path 默认为当前目录）',
+    async handler({ intent, userId, fullAccess }) {
+      const sandbox = require('./sandbox');
+      try {
+        const r = sandbox.listDir(userId, intent.path || intent.dir || '.', { fullAccess });
+        const lines = (r.items || []).slice(0, 60).map((it) => `${it.type === 'dir' ? '📁' : '📄'} ${it.name}`).join('\n');
+        return {
+          data: r,
+          summary: `📂 ${r.path}/ 共 ${r.items.length} 项\n\n${lines}`,
+          steps: [{ icon: '📂', text: `列出目录 ${r.path}` }],
+        };
+      } catch (e) {
+        return { summary: '⛔ 沙箱拒绝：' + e.message };
+      }
+    },
+  },
+  sandbox_run: {
+    description: '在沙箱中执行 PowerShell 命令（受执行策略约束）',
+    async handler({ intent, userId, fullAccess }) {
+      const sandbox = require('./sandbox');
+      const r = await sandbox.runCommand(userId, intent.command || intent.title || '', { fullAccess });
+      if (!r.ok) return { summary: `⚠️ ${r.error || '沙箱拒绝执行'}` };
+      const out = (r.stdout || '').slice(0, 1500) || '(无输出)';
+      return { data: r, summary: `🛡 沙箱命令已执行（exit ${r.code}）\n\n${out}`, steps: [{ icon: '🛡', text: '沙箱命令执行' }] };
+    },
+  },
+  sandbox_git_status: {
+    description: '查看工作区 git 状态（未提交/变更文件）',
+    async handler({ userId }) {
+      const sandbox = require('./sandbox');
+      const r = await sandbox.gitStatus(userId);
+      if (!r.ok) return { summary: '⚠️ git status 失败：' + r.error };
+      return { data: r, summary: `🌿 Git 状态：\n\n${r.output || '工作区干净'}`, steps: [{ icon: '🌿', text: '查看 git 状态' }] };
+    },
+  },
+
+  sandbox_git_diff: {
+    description: '查看工作区 git diff（可选 stat=true 只看统计）',
+    async handler({ intent, userId }) {
+      const sandbox = require('./sandbox');
+      const r = await sandbox.gitDiff(userId, { stat: !!intent.stat, base: intent.base });
+      if (!r.ok) return { summary: '⚠️ git diff 失败：' + (r.error || r.stderr) };
+      const out = (r.output || '').slice(0, 6000) || '（没有 diff）';
+      return { data: r, summary: `🌿 Git diff${intent.stat ? '（stat）' : ''}：\n\n${out}`, steps: [{ icon: '🌿', text: '查看 git diff' }] };
+    },
+  },
+  sandbox_git_worktree_list: {
+    description: '列出当前仓库的所有 Git worktrees',
+    async handler({ userId }) {
+      const sandbox = require('./sandbox');
+      const r = await sandbox.gitWorktreeList(userId);
+      if (!r.ok) return { summary: '⚠️ worktree 列表失败：' + (r.error || r.stderr) };
+      return { data: r, summary: `🌿 Worktrees：\n\n${r.output || '（无）'}`, steps: [{ icon: '🌿', text: '列出 worktrees' }] };
+    },
+  },
+  sandbox_git_worktree_add: {
+    description: '创建一个 Git worktree（path 相对/绝对路径，branch 可选）',
+    async handler({ intent, userId, fullAccess }) {
+      const sandbox = require('./sandbox');
+      const pathArg = intent.path || intent.dir;
+      if (!pathArg) return { summary: '⚠️ 请提供 worktree 路径' };
+      const r = await sandbox.gitWorktreeAdd(userId, pathArg, intent.branch, { fullAccess });
+      if (!r.ok) return { summary: '⛔ worktree 创建失败：' + (r.error || r.stderr) };
+      return { data: r, summary: `🌿 已创建 worktree：${r.path}${r.branch ? '（分支 ' + r.branch + '）' : ''}`, steps: [{ icon: '🌿', text: '创建 worktree' }] };
+    },
+  },
+
+  apply_patch: {
+    description: '用 Codex apply_patch 格式修改工作区文件（patch 参数为完整 patch 文本）',
+    async handler({ intent, userId, fullAccess }) {
+      const patch = require('./patch');
+      const text = intent.patch || intent.content || '';
+      if (!text) return { summary: '⚠️ 请提供 patch 文本' };
+      const r = patch.applyPatch(userId, text, { fullAccess });
+      if (!r.ok) return { summary: '⛔ apply_patch 失败：' + r.error, steps: [{ icon: '⛔', text: 'patch 应用失败' }] };
+      const lines = r.files.map((f) => `${f.action} ${f.path} (+${f.additions} -${f.deletions})`).join('\n');
+      return {
+        data: r,
+        summary: `🩹 apply_patch 完成：\n\n${lines}`,
+        steps: [{ icon: '🩹', text: `应用 patch（${r.files.length} 个文件）` }],
+      };
+    },
+  },
+
+  // ===== Codex 能力：/review 与 subagent =====
+  review_changes: {
+    description: '审阅当前未提交的代码变更（仿 Codex /review，只读不改工作区）',
+    async handler({ intent, userId }) {
+      const review = require('./review');
+      const r = await review.run(userId, intent.base);
+      return {
+        data: r.context,
+        summary: '🔍 Code Review\n\n' + r.text,
+        steps: [{ icon: '🔍', text: r.context && r.context.hasChanges ? '审阅未提交变更' : '没有未提交变更' }],
+      };
+    },
+  },
+  spawn_agent: {
+    description: '启动一个只读子代理并行调查/分析（task 为要委派的任务）',
+    async handler({ intent, userId, onDelta }) {
+      const task = intent.task || intent.prompt || intent.title || '';
+      if (!task) return { summary: '⚠️ 请说明要委派给子代理的任务' };
+      const allowedTools = [
+        'sandbox_read_file', 'sandbox_list_dir', 'sandbox_git_status', 'sandbox_git_diff',
+        'browser_snapshot', 'memory_recall', 'web_search',
+      ];
+      const r = await runCodexLoop(userId, task, {
+        allowedTools,
+        subagent: true,
+        deepThink: false,
+        approvalMode: 'auto',
+        onDelta,
+      });
+      const tasks = require('./tasks');
+      if (!r) {
+        tasks.record(userId, { type: 'subagent', title: '子代理失败', prompt: task, status: 'error', error: '子代理未能完成任务' });
+        return { summary: '⚠️ 子代理未能完成任务' };
+      }
+      tasks.record(userId, { type: 'subagent', title: '子代理：' + String(task).slice(0, 40), prompt: task, status: 'success', result: r.reply });
+      return {
+        data: r,
+        summary: `🤖 子代理结果：\n\n${r.reply}`,
+        steps: [{ icon: '🤖', text: '子代理完成：' + String(task).slice(0, 40) }],
+      };
+    },
+  },
+
+  // ===== MCP（Model Context Protocol）=====
+  mcp_list_servers: {
+    description: '列出已配置的 MCP servers 及其连接状态',
+    async handler({ userId }) {
+      const mcp = require('./mcp');
+      const items = mcp.status(userId);
+      const text = items.length
+        ? items.map((s) => `• ${s.name}（${s.transport}${s.connected ? '，已连接' : '，未连接'}）`).join('\n')
+        : '还没有配置 MCP server';
+      return { data: items, summary: `🔌 MCP servers：\n\n${text}`, steps: [{ icon: '🔌', text: `发现 ${items.length} 个 MCP server` }] };
+    },
+  },
+  mcp_list_tools: {
+    description: '列出某个 MCP server 提供的工具（server 参数为名称）',
+    async handler({ intent, userId }) {
+      const mcp = require('./mcp');
+      const name = intent.server || intent.name;
+      if (!name) return { summary: '⚠️ 请提供 MCP server 名称' };
+      const tools = await mcp.listTools(userId, name);
+      const text = tools.map((t) => `• ${t.name}: ${t.description || ''}`).join('\n') || '（无工具）';
+      return { data: tools, summary: `🔌 ${name} 的工具：\n\n${text}`, steps: [{ icon: '🔌', text: `列出 ${name} 的 ${tools.length} 个工具` }] };
+    },
+  },
+  mcp_call: {
+    description: '调用 MCP server 的一个工具（server/tool/arguments）',
+    async handler({ intent, userId }) {
+      const mcp = require('./mcp');
+      const server = intent.server || intent.name;
+      const tool = intent.tool;
+      if (!server || !tool) return { summary: '⚠️ 请提供 server 和 tool' };
+      const r = await mcp.callTool(userId, server, tool, intent.arguments || intent.args || {});
+      const content = Array.isArray(r.content)
+        ? r.content.map((c) => c.text || JSON.stringify(c)).join('\n')
+        : JSON.stringify(r);
+      return { data: r, summary: `🔌 MCP ${server}.${tool}：\n\n${String(content).slice(0, 3000)}`, steps: [{ icon: '🔌', text: `调用 MCP ${server}.${tool}` }] };
+    },
+  },
+
+  spawn_task: {
+    description: '创建一个后台 Agent 任务并异步执行（task/prompt 为任务描述）',
+    async handler({ intent, userId }) {
+      const tasks = require('./tasks');
+      const prompt = intent.prompt || intent.task || intent.title || '';
+      if (!prompt) return { summary: '⚠️ 请说明后台任务要做什么' };
+      const title = intent.name || String(prompt).slice(0, 40);
+      const t = tasks.create(userId, { title, prompt, model: intent.model });
+      return {
+        data: t,
+        summary: `🚀 已创建后台任务 #${t.id}：${t.title}\n（会在后台异步执行，可在「后台任务」面板查看结果）`,
+        steps: [{ icon: '🚀', text: `创建后台任务 #${t.id}` }],
+      };
+    },
+  },
+
+  // ===== 技能区（use_skill） =====
+  use_skill: {
+    description: '执行本地技能区里的一个技能（skill=技能名，task=要完成的任务）',
+    async handler({ intent, userId, onDelta }) {
+      const skills = require('./skills');
+      const skillName = intent.skill || intent.name || intent.title || '';
+      const task = intent.task || intent.message || intent.question || '';
+      const r = await skills.runSkill(userId, skillName, task, {
+        max_tokens: intent.max_tokens,
+        onDelta,
+      });
+      if (!r.ok) return { summary: '⚠️ ' + r.error };
+      return {
+        data: r,
+        summary: r.text || '✅ 技能执行完成',
+        steps: [{ icon: '⚡', text: `执行技能：${r.skill}` }],
+      };
+    },
+  },
 };
 
 /**
@@ -894,17 +1413,7 @@ async function executeIntent(intent, userId, originalMessage, opts = {}) {
       steps: [],
     };
   }
-  try {
-    const r = await tool.handler({ intent, userId, message: originalMessage, onDelta: opts.onDelta });
-    // 实时推送操作转录（MiniCode transcript 灵魂）
-    if (opts.onStep && r.steps && r.steps.length) {
-      for (const s of r.steps) { try { opts.onStep(s); } catch (_) {} }
-    }
-    return r;
-  } catch (e) {
-    logger.error('tool failed:', intent.intent, e.message);
-    return { data: null, summary: '⚠️ 执行出错：' + e.message, steps: [] };
-  }
+  return executeToolSafe(intent.intent, intent, userId, originalMessage, opts);
 }
 
 /**
@@ -994,11 +1503,17 @@ function inferCronFromMessage(msg) {
 const AGENT_MAX_ROUNDS = 4;
 
 /** 生成给 LLM 的工具清单描述 */
-function toolCatalogFor(enableSearch) {
-  return Object.entries(TOOLS)
-    .filter(([name]) => name !== 'web_search' || enableSearch) // 搜索关闭时不暴露该工具
-    .map(([name, t]) => `- ${name}: ${t.description}`)
-    .join('\n');
+function toolCatalogFor(enableSearch, allowedTools) {
+  const allow = Array.isArray(allowedTools) && allowedTools.length ? new Set(allowedTools) : null;
+  const lines = Object.entries(TOOLS)
+    .filter(([name]) => (name !== 'web_search' || enableSearch) && name !== 'use_skill' && (!allow || allow.has(name)))
+    .map(([name, t]) => `- ${name}: ${t.description}`);
+  if (allow) return lines.join('\n');
+  try {
+    const skills = require('./skills').listForAgent();
+    if (skills.length) lines.push(`- use_skill: 调用本地技能区技能。可用技能：${skills.join('；')}`);
+  } catch (_) {}
+  return lines.join('\n');
 }
 
 /**
@@ -1044,7 +1559,16 @@ B. 用户要执行操作（可多个）：
    - 新需求 → 只调用 prd_generate，args: {"topic":"需求主题"}
    - "确认/导出" → prd_confirm
    - "审查/优化建议" → prd_review
-8. 只输出 JSON`;
+8. 电脑/浏览器类请求：
+   - "截屏/看屏幕" → computer_screenshot（全屏）；指定窗口时可先 computer_list_windows
+   - "打开浏览器/打开XX网页" → browser_open，url 用完整 https 地址或用搜索词拼 http(s)
+   - 用户要求"在网页上点XX/输入XX/看网页内容" → 先 browser_snapshot 读快照，再按坐标/文本调用 browser_click / browser_type
+9. 记忆类请求：
+   - "记住/我喜欢/我习惯/我的偏好" → memory_remember
+   - "回忆/我记得什么" → memory_recall
+   - 系统已注入 [长期记忆]，普通对话无需额外调用 memory_recall，直接用记忆回答
+10. 技能类请求：用户请求匹配某个技能的描述/适用场景 → use_skill，args: {"skill":"技能名","task":"具体任务"}
+11. 只输出 JSON`;
 
 /**
  * 解析 LLM 的 agent 计划 JSON
@@ -1064,6 +1588,323 @@ function parseAgentDecision(text) {
 }
 
 /**
+ * 迭代式工具循环（仿 Codex function-call loop）：
+ *   模型每次只决定一步 → 执行工具 → 把结果喂回模型 → 继续，
+ *   直到模型输出 final。沙箱工具（sandbox_*）受执行策略约束。
+ */
+const CODEX_MAX_ROUNDS = 5;
+const CODEX_AGENT_SYSTEM = `你是 WorkBuddy 的自动执行 Agent（仿 Codex）。需要时自动调用工具或技能，观察结果后继续，直到完成任务。
+只输出一个 JSON 对象（不要 Markdown 包裹、不要解释）：
+{"action":"call","tool":"工具名","args":{...},"reason":"为什么调用"}   ← 需要工具
+{"action":"final","reply":"最终回答","done":true}                     ← 任务完成或直接回答
+
+可用工具：
+{TOOLS}
+
+规则：
+1. 用户要求操作电脑/浏览器/记忆/技能/工作区文件时，先调用对应工具，不要只解释怎么做
+2. 每次只调用一个工具；系统会返回工具结果，你再决定下一步
+3. 相同工具+相同参数连续出现 = 死循环，必须改参数或直接 final
+4. 删除/格式化/改注册表等危险操作：先 ask_clarification，或由沙箱策略拒绝
+5. 任务完成后输出 final；reply 可以是完整答案，也可以是对已执行结果的总结
+6. 最多自动执行 {MAX} 轮`;
+
+// ===== 审批策略（请求批准 / 帮我批准 / 完全访问）=====
+const SENSITIVE_TOOLS = new Set([
+  'computer_run', 'computer_launch', 'computer_screenshot', 'computer_mouse', 'computer_type',
+  'computer_key', 'computer_scroll', 'computer_activate',
+  'browser_start', 'browser_open', 'browser_navigate', 'browser_screenshot', 'browser_click',
+  'browser_type', 'browser_key', 'browser_scroll', 'browser_close',
+  'sandbox_run', 'sandbox_write_file', 'sandbox_read_file', 'sandbox_list_dir', 'sandbox_git_status',
+  'sandbox_git_worktree_add', 'apply_patch',
+  'mcp_call',
+]);
+
+function normalizeApprovalMode(mode) {
+  return ['ask', 'auto', 'full'].includes(mode) ? mode : 'ask';
+}
+
+function approvalNeeded(mode, tool) {
+  if (mode === 'full') return false;
+  if (!SENSITIVE_TOOLS.has(tool)) return false;
+  if (mode === 'auto') {
+    // 沙箱内安全操作自动批准；命令/GUI/完全访问类操作仍需询问
+    return !['sandbox_read_file', 'sandbox_list_dir', 'sandbox_write_file', 'sandbox_git_status'].includes(tool);
+  }
+  return true; // ask
+}
+
+function approvalSummary(tool, intent = {}) {
+  const args = {};
+  for (const [k, v] of Object.entries(intent || {})) {
+    if (k === 'intent' || k === 'message') continue;
+    args[k] = String(v).slice(0, 200);
+  }
+  const detail = JSON.stringify(args);
+  const map = {
+    sandbox_run: '在工作区沙箱中执行 PowerShell 命令',
+    computer_run: '在本机执行 PowerShell 命令',
+    sandbox_write_file: '写入工作区文件',
+    sandbox_read_file: '读取工作区文件',
+    sandbox_list_dir: '查看工作区目录',
+    sandbox_git_status: '查看工作区 Git 状态',
+    computer_screenshot: '截取电脑屏幕',
+    browser_open: '打开受控浏览器网页',
+  };
+  return (map[tool] || `调用 ${tool}`) + (detail && detail !== '{}' ? '：' + detail : '');
+}
+
+async function maybeApprove(tool, intent, userId, opts = {}) {
+  const mode = normalizeApprovalMode(opts.approvalMode);
+  if (!approvalNeeded(mode, tool)) return { approved: true, auto: true, mode };
+  if (typeof opts.onApproval !== 'function') {
+    return { approved: false, reason: 'no_approval_channel', mode };
+  }
+  const approvals = require('./approvals');
+  const info = { tool, mode, reason: approvalSummary(tool, intent), args: { ...intent } };
+  delete info.args.userId;
+  delete info.args.message;
+  const { id, promise } = approvals.create(userId, info);
+  try { opts.onApproval({ id, ...info, expires_in: 300 }); } catch (_) {}
+  return await promise;
+}
+
+/**
+ * 把用户在 Composer 里添加的目标/文件/文件夹整理成上下文
+ */
+function buildComposerContext(opts = {}, userId = 0) {
+  let ctx = '';
+  try { ctx += require('./rules').context(userId); } catch (_) {}
+  if (opts.goal) ctx += `\n[持续目标] ${String(opts.goal).slice(0, 800)}`;
+  if (opts.outcomes) ctx += `\n[可衡量成果] ${String(opts.outcomes).slice(0, 800)}`;
+  if (opts.goal || opts.outcomes) {
+    ctx += '\n[目标纪律] 每次回复都要围绕持续目标推进；给出可衡量的进展、当前差距和下一步动作。';
+  }
+  const atts = Array.isArray(opts.attachments) ? opts.attachments.slice(0, 6) : [];
+  if (!atts.length) return ctx;
+  ctx += '\n[用户添加的上下文]';
+  for (const a of atts) {
+    if (a && a.content) {
+      const source = a.converted ? `（${a.vendor || 'MarkItDown'} 解析）` : '';
+      ctx += `\n--- ${String(a.name || '附件').slice(0, 120)}${source} ---\n${String(a.content).slice(0, 20_000)}`;
+      continue;
+    }
+    const p = a && (a.path || a.file);
+    if (!p) continue;
+    try {
+      const sandbox = require('./sandbox');
+      if (a.folder) {
+        const r = sandbox.listDir(userId, p, { fullAccess: true });
+        ctx += `\n--- 文件夹 ${p} ---\n` + r.items.slice(0, 100).map((it) => `${it.type === 'dir' ? '[dir]' : '[file]'} ${it.name}`).join('\n');
+      } else {
+        const r = sandbox.readFile(userId, p, { fullAccess: true });
+        ctx += `\n--- 文件 ${p} ---\n${r.content.slice(0, 20_000)}`;
+      }
+    } catch (e) {
+      ctx += `\n--- ${p}（读取失败：${e.message}）---`;
+    }
+  }
+  return ctx;
+}
+
+function extractMentions(message) {
+  const out = [];
+  try {
+    for (const m of String(message || '').matchAll(/@([^\s@]+)/g)) out.push(m[1]);
+  } catch (_) {}
+  return [...new Set(out)].slice(0, 5);
+}
+
+function buildUserContent(message, images) {
+  const list = Array.isArray(images) ? images.filter((x) => x && x.dataUrl).slice(0, 4) : [];
+  if (!list.length) return message;
+  return [
+    { type: 'text', text: String(message || '') },
+    ...list.map((img) => ({ type: 'image_url', image_url: { url: img.dataUrl } })),
+  ];
+}
+
+/**
+ * 计划模式：只输出执行计划，不调用任何工具/技能
+ */
+async function runPlanOnly(userId, message, opts = {}) {
+  const onDelta = typeof opts.onDelta === 'function' ? opts.onDelta : null;
+  const emitThought = typeof opts.emitThought === 'function' ? opts.emitThought : null;
+  const thought = (icon, label, detail) => {
+    if (!emitThought) return;
+    try { emitThought({ icon, label, detail: String(detail || '').slice(0, 400) }); } catch (_) {}
+  };
+  thought('📋', '计划模式', '只生成执行计划，不调用工具');
+  let memoryContext = '';
+  try {
+    const memory = require('./memory');
+    memoryContext = memory.renderContext(memory.recall(userId, message, 6));
+  } catch (_) {}
+  const sys = `你是 WorkBuddy 的规划器。当前是计划模式：只输出计划，绝对不要调用/执行任何工具。
+输出结构：
+1. 目标：一句话
+2. 步骤：编号列出，每步标注可能用到的工具/技能（用工具名）
+3. 风险与需要批准的操作
+4. 验收标准
+
+可用工具：
+${toolCatalogFor(true)}`;
+  const userText = `${buildComposerContext(opts, userId)}${memoryContext}\n\n用户需求：${message}`;
+  const r = onDelta
+    ? await llm.chatStream([{ role: 'system', content: sys }, { role: 'user', content: buildUserContent(userText, opts.images) }], { temperature: 0.4, max_tokens: 900, userId, intent: 'plan_mode', model: opts.model }, onDelta)
+    : await llm.chat([{ role: 'system', content: sys }, { role: 'user', content: buildUserContent(userText, opts.images) }], { temperature: 0.4, max_tokens: 900, userId, intent: 'plan_mode', model: opts.model });
+  return { intent: 'plan', confidence: 1, reply: r.ok ? r.text : '⚠️ ' + r.error, data: null, steps: [] };
+}
+
+async function runCodexLoop(userId, message, opts = {}) {
+  const enableSearch = !!opts.enableSearch;
+  const onDelta = (opts && typeof opts.onDelta === 'function') ? opts.onDelta : null;
+  const onStep = (opts && typeof opts.onStep === 'function') ? opts.onStep : null;
+  const emitThought = typeof opts.emitThought === 'function' ? opts.emitThought : null;
+  const approvalMode = normalizeApprovalMode(opts.approvalMode);
+  const onApproval = typeof opts.onApproval === 'function' ? opts.onApproval : null;
+  const allowedTools = Array.isArray(opts.allowedTools) && opts.allowedTools.length ? opts.allowedTools : null;
+  const thought = (icon, label, detail) => {
+    if (!emitThought) return;
+    try { emitThought({ icon, label, detail: String(detail || '').slice(0, 400) }); } catch (_) {}
+  };
+  const streamOrChat = (messages, llmOpts, delta) => {
+    return delta ? llm.chatStream(messages, llmOpts, delta) : llm.chat(messages, llmOpts);
+  };
+
+  const c = llm.getClient();
+  if (!c) return null;
+  thought('🧭', '理解目标', message.slice(0, 240));
+  thought('🤖', '自动执行模式', '按需调用工具/技能，观察结果后继续');
+
+  let draftContext = '';
+  try {
+    const d = require('./ppt').getDraft(userId);
+    if (d) draftContext += `\n[当前状态] 用户有一个进行中的PPT草稿：《${d.title}》（${d.pages.length} 页，阶段：${d.stage}）。用户此时说"确认/可以/好的"就是在推进这个流程。`;
+    const pd = require('./prd').getDraft(userId);
+    if (pd) draftContext += `\n[当前状态] 用户有一个进行中的PRD草稿：《${pd.title}》（${pd.features.length}个功能模块）。用户此时说"确认"就是在导出。`;
+  } catch (_) {}
+
+  let memoryContext = '';
+  try {
+    const memory = require('./memory');
+    memoryContext = memory.renderContext(memory.recall(userId, message, 6));
+  } catch (_) {}
+
+  const composerContext = buildComposerContext(opts, userId);
+  const systemBase = CODEX_AGENT_SYSTEM
+    .replace('{TOOLS}', toolCatalogFor(enableSearch, allowedTools))
+    .replace('{MAX}', String(CODEX_MAX_ROUNDS)) + draftContext + memoryContext + composerContext;
+
+  let transcript = `用户：${message}`;
+  const results = [];
+  const steps = [];
+  let lastKey = null;
+  let lastTool = null;
+  let finalDecision = null;
+
+  for (let round = 0; round < CODEX_MAX_ROUNDS; round++) {
+    const userText = transcript.slice(0, 7000);
+    let raw = '';
+    try {
+      const resp = await c.chat.completions.create({
+        model: opts.model || llm.resolveConfig().model,
+        messages: [
+          { role: 'system', content: systemBase },
+          {
+            role: 'user',
+            content: round === 0
+              ? buildUserContent(userText, opts.images)
+              : userText + '\n\n请根据工具结果继续，或输出 final。',
+          },
+        ],
+        temperature: 0.2,
+        max_tokens: 420,
+      });
+      raw = resp.choices?.[0]?.message?.content || '';
+      if (resp.usage && resp.usage.total_tokens) {
+        llm.recordUsage({
+          model: opts.model || llm.resolveConfig().model,
+          prompt_tokens: resp.usage.prompt_tokens,
+          completion_tokens: resp.usage.completion_tokens,
+          total_tokens: resp.usage.total_tokens,
+          userId, intent: 'codex_loop',
+        });
+      }
+    } catch (e) {
+      logger.warn('codex loop LLM failed:', e.message);
+      return null; // 回退到 plan-then-execute
+    }
+
+    const decision = safeParseJson(raw);
+    if (!decision) return null;
+    if (decision.action === 'final') { finalDecision = decision; break; }
+    if (decision.action !== 'call' || !TOOLS[decision.tool]) return null;
+
+    const tool = decision.tool;
+    const args = decision.args || {};
+    const key = tool + JSON.stringify(args);
+    if (round > 0 && key === lastKey) {
+      thought('⚠️', '停止重复调用', `${tool} 参数未变化，改为总结结果`);
+      break;
+    }
+    lastKey = key;
+    lastTool = tool;
+    thought('🔧', '调用 ' + tool, decision.reason || JSON.stringify(args).slice(0, 200));
+
+    const fakeIntent = { intent: tool, ...args };
+    const exec = await executeToolSafe(tool, fakeIntent, userId, message, {
+      onDelta, onStep, approvalMode, onApproval, allowedTools,
+    });
+    const summary = String(exec.summary || 'done');
+    thought('✓', '工具返回', summary.slice(0, 250));
+    results.push({ tool, summary });
+    steps.push(...(exec.steps || []));
+    transcript += `\n\n[工具 ${tool}] 参数：${JSON.stringify(args).slice(0, 300)}\n结果：${summary.slice(0, 1500)}`;
+    if (transcript.length > 7000) transcript = transcript.slice(-7000);
+  }
+
+  // 无工具且模型直接 final：像普通聊天一样流式展开
+  if (!results.length && finalDecision && finalDecision.reply) {
+    const planned = finalDecision.reply;
+    thought('💬', '组织回答', '根据当前上下文生成最终回复');
+    const r = await streamOrChat(
+      [
+        { role: 'system', content: '你是 WorkBuddy 本地智能助手。中文、简洁友好、自然回答。' },
+        { role: 'user', content: buildUserContent(planned && planned !== message ? `${message}\n\n（回答方向：${planned}）` : message, opts.images) },
+      ],
+      { temperature: 0.7, max_tokens: 500, userId, intent: 'chat', model: opts.model },
+      onDelta
+    );
+    const text = r.ok ? r.text : (planned || '⚠️ ' + r.error);
+    if (!r.ok && onDelta && text) onDelta(text);
+    thought('✓', '回答完成', text.slice(0, 200));
+    return { intent: 'chat', confidence: 1, reply: text, data: null, steps };
+  }
+  if (!results.length && finalDecision) {
+    const text = finalDecision.reply || '已完成';
+    if (onDelta) onDelta(text);
+    thought('✓', '回答完成', text.slice(0, 200));
+    return { intent: 'chat', confidence: 1, reply: text, data: null, steps };
+  }
+  if (!results.length) return null; // 模型未给出可执行决定 → 回到旧规划器
+
+  const record = results.map((r, i) => `${i + 1}. ${r.tool}: ${r.summary.slice(0, 400)}`).join('\n');
+  const finalR = await streamOrChat(
+    [
+      { role: 'system', content: '你是 WorkBuddy 本地智能助手。根据工具执行记录生成最终回复：先总结做了什么，再给出结果与下一步。中文简洁。' },
+      { role: 'user', content: `用户原话：${message}\n\n工具执行记录：\n${record.slice(0, 5000)}` },
+    ],
+    { temperature: 0.5, max_tokens: 700, userId, intent: 'codex_final', model: opts.model },
+    onDelta
+  );
+  const reply = finalR.ok ? finalR.text : results.map((r) => `• ${r.tool}: ${r.summary}`).join('\n');
+  if (!finalR.ok && onDelta && reply) onDelta(reply);
+  thought('🏁', '整理完成', reply.slice(0, 240));
+  return { intent: lastTool || 'agent', confidence: 1, reply, data: null, steps };
+}
+
+/**
  * Plan-then-Execute：
  * LLM 一次输出完整计划 → 逐步执行每个工具 → 汇总结果
  */
@@ -1071,6 +1912,16 @@ async function runAgentLoop(userId, message, opts = {}) {
   const enableSearch = !!opts.enableSearch;
   const onDelta = (opts && typeof opts.onDelta === 'function') ? opts.onDelta : null;
   const onStep = (opts && typeof opts.onStep === 'function') ? opts.onStep : null;
+  const emitThought = typeof opts.emitThought === 'function' ? opts.emitThought : null;
+  const approvalMode = normalizeApprovalMode(opts.approvalMode);
+  const onApproval = typeof opts.onApproval === 'function' ? opts.onApproval : null;
+  const allowedTools = Array.isArray(opts.allowedTools) && opts.allowedTools.length ? opts.allowedTools : null;
+  const thought = (icon, label, detail) => {
+    if (!emitThought) return;
+    try { emitThought({ icon, label, detail: String(detail || '').slice(0, 400) }); } catch (_) {}
+  };
+
+  thought('🧠', '进入思考模式', '读取记忆与上下文，决定如何拆解任务');
 
   // 注入 PPT + PRD 草稿状态（规划器需要知道"是否存在进行中的草稿"才能正确路由）
   let draftContext = '';
@@ -1081,19 +1932,28 @@ async function runAgentLoop(userId, message, opts = {}) {
     if (pd) draftContext += `\n[当前状态] 用户有一个进行中的PRD草稿：《${pd.title}》（${pd.features.length}个功能模块）。用户此时说"确认"就是在导出。`;
   } catch (_) {}
 
+  // 注入长期记忆：每次对话自动召回相关记忆
+  let memoryContext = '';
+  try {
+    const memory = require('./memory');
+    memoryContext = memory.renderContext(memory.recall(userId, message, 6));
+  } catch (_) {}
+  draftContext += buildComposerContext(opts, userId);
+  if (memoryContext) thought('🧠', '召回长期记忆', memoryContext.slice(0, 180));
+
   // 确定性指令快通道
   const trimmed = message.trim();
   // PPT 确认
   if (draftContext.includes('PPT草稿') && /^(确认|确定|可以|好的?|ok|yes|继续)[。！!。\s]*$/i.test(trimmed)) {
     logger.info('agent: fast-path ppt-confirm');
-    const r = await executeToolSafe('ppt_confirm', { intent: 'ppt_confirm' }, userId, message, { onDelta, onStep });
+    const r = await executeToolSafe('ppt_confirm', { intent: 'ppt_confirm' }, userId, message, { onDelta, onStep, approvalMode, onApproval, allowedTools });
     if (onDelta && r.summary) onDelta(r.summary);
     return { intent: 'ppt_confirm', confidence: 1, reply: r.summary || '✅ 已确认', data: null, steps: r.steps || [] };
   }
   // PRD 确认（导出 Markdown）
   if (draftContext.includes('PRD草稿') && /^(确认|确定|可以|导出|好的?|ok|yes|继续)[。！!。\s]*$/i.test(trimmed)) {
     logger.info('agent: fast-path prd-confirm');
-    const r = await executeToolSafe('prd_confirm', { intent: 'prd_confirm' }, userId, message, { onDelta, onStep });
+    const r = await executeToolSafe('prd_confirm', { intent: 'prd_confirm' }, userId, message, { onDelta, onStep, approvalMode, onApproval, allowedTools });
     if (onDelta && r.summary) onDelta(r.summary);
     return { intent: 'prd_confirm', confidence: 1, reply: r.summary || '📄 已导出', data: null, steps: r.steps || [] };
   }
@@ -1103,7 +1963,7 @@ async function runAgentLoop(userId, message, opts = {}) {
       const pd = require('./ppt').getDraft(userId);
       if (pd && pd.stage === 'design_pending') {
         logger.info('agent: fast-path theme');
-        const r = await executeToolSafe('ppt_theme', { intent: 'ppt_theme' }, userId, message, { onDelta, onStep });
+        const r = await executeToolSafe('ppt_theme', { intent: 'ppt_theme' }, userId, message, { onDelta, onStep, approvalMode, onApproval, allowedTools });
         if (onDelta && r.summary) onDelta(r.summary);
         return { intent: 'ppt_theme', confidence: 1, reply: r.summary || '🎨 已应用主题', data: null, steps: r.steps || [] };
       }
@@ -1112,13 +1972,14 @@ async function runAgentLoop(userId, message, opts = {}) {
 
   // 1. 让 LLM 出计划（非流式）
   let raw;
+  thought('🗺', '规划执行路径', '让模型拆解意图并选择合适工具');
   try {
     const c = llm.getClient();
     if (!c) return null; // LLM 不可用 → 走旧路径
     const resp = await c.chat.completions.create({
-      model: llm.resolveConfig().model,
+      model: opts.model || llm.resolveConfig().model,
       messages: [
-        { role: 'system', content: AGENT_SYSTEM.replace('{TOOLS}', toolCatalogFor(enableSearch)) + draftContext },
+        { role: 'system', content: AGENT_SYSTEM.replace('{TOOLS}', toolCatalogFor(enableSearch)) + draftContext + memoryContext },
         { role: 'user', content: message },
       ],
       temperature: 0.2,
@@ -1127,7 +1988,7 @@ async function runAgentLoop(userId, message, opts = {}) {
     raw = resp.choices?.[0]?.message?.content || '';
     if (resp.usage && resp.usage.total_tokens) {
       llm.recordUsage({
-        model: llm.resolveConfig().model,
+        model: opts.model || llm.resolveConfig().model,
         prompt_tokens: resp.usage.prompt_tokens,
         completion_tokens: resp.usage.completion_tokens,
         total_tokens: resp.usage.total_tokens,
@@ -1145,6 +2006,7 @@ async function runAgentLoop(userId, message, opts = {}) {
     // JSON 无效但 LLM 输出了文字 → 当 final 回复
     if (raw && raw.trim().length > 2 && !raw.trim().startsWith('{')) {
       const text = raw.trim();
+      thought('💬', '直接回答', text.slice(0, 200));
       if (onDelta) onDelta(text);
       return { intent: 'agent', confidence: 1, reply: text, data: null, steps: [] };
     }
@@ -1155,13 +2017,14 @@ async function runAgentLoop(userId, message, opts = {}) {
   //     （规划器的 reply 只是方向提示；把提示并入 user 消息让二段模型展开）
   if (decision.action === 'final') {
     const planned = decision.reply || '';
+    thought('💬', '直接回答', planned.slice(0, 200));
     try {
       const r = await llm.chatStream(
         [
           { role: 'system', content: '你是 WorkBuddy 本地智能助手。中文、简洁友好、自然回答。' },
-          { role: 'user', content: planned && planned !== message ? `${message}\n\n（回答方向：${planned}）` : message },
+          { role: 'user', content: buildUserContent(planned && planned !== message ? `${message}\n\n（回答方向：${planned}）` : message, opts.images) },
         ],
-        { temperature: 0.7, max_tokens: 400, userId, intent: 'chat' },
+        { temperature: 0.7, max_tokens: 400, userId, intent: 'chat', model: opts.model },
         onDelta
       );
       const text = r.ok ? r.text : (planned || '⚠️ ' + r.error);
@@ -1177,9 +2040,12 @@ async function runAgentLoop(userId, message, opts = {}) {
   const allSteps = [];
   const results = [];
   let lastIntent = 'agent';
+  thought('🗺', '执行计划', decision.steps.map((s) => s.tool).join(' → '));
   for (const step of decision.steps) {
     const fakeIntent = { intent: step.tool, ...step.args };
-    const exec = await executeToolSafe(step.tool, fakeIntent, userId, message, { onDelta, onStep });
+    thought('🔧', '执行 ' + step.tool, JSON.stringify(step.args || {}).slice(0, 200));
+    const exec = await executeToolSafe(step.tool, fakeIntent, userId, message, { onDelta, onStep, approvalMode, onApproval, allowedTools });
+    thought('✓', '完成 ' + step.tool, (exec.summary || 'done').slice(0, 200));
     allSteps.push(...(exec.steps || []));
     lastIntent = step.tool;
     // PPT/PRD 类工具的 summary 是给用户看的主要内容（大纲/PRD预览），不截断
@@ -1196,6 +2062,7 @@ async function runAgentLoop(userId, message, opts = {}) {
     reply = results.map((r) => `• ${r.tool}: ${r.summary.slice(0, 300)}`).join('\n');
   }
   if (onDelta) onDelta(reply);
+  thought('🏁', '完成', results.length + ' 个步骤已执行');
   return { intent: lastIntent, confidence: 1, reply, data: null, steps: allSteps };
 }
 
@@ -1203,8 +2070,20 @@ async function runAgentLoop(userId, message, opts = {}) {
 async function executeToolSafe(name, intent, userId, message, opts = {}) {
   const tool = TOOLS[name];
   if (!tool) return { summary: `未知工具 ${name}`, steps: [] };
+  if (Array.isArray(opts.allowedTools) && opts.allowedTools.length && !opts.allowedTools.includes(name)) {
+    return { summary: `⛔ 子代理无权调用工具：${name}`, steps: [] };
+  }
+  const approval = await maybeApprove(name, intent, userId, opts);
+  if (!approval.approved) {
+    const text = approval.reason === 'timeout' ? `批准超时，已取消：${name}` : `未批准，已跳过：${name}`;
+    if (opts.onStep) { try { opts.onStep({ icon: '⏸', text }); } catch (_) {} }
+    return { summary: '⏸ ' + text, steps: [{ icon: '⏸', text }] };
+  }
   try {
-    const r = await tool.handler({ intent, userId, message, onDelta: opts.onDelta });
+    const r = await tool.handler({
+      intent, userId, message, onDelta: opts.onDelta,
+      fullAccess: opts.approvalMode === 'full',
+    });
     if (opts.onStep && r.steps && r.steps.length) {
       for (const s of r.steps) { try { opts.onStep(s); } catch (_) {} }
     }
@@ -1219,11 +2098,48 @@ async function executeToolSafe(name, intent, userId, message, opts = {}) {
 async function chat(userId, message, opts = {}) {
   const enableSearch = !!(opts && opts.enableSearch);
   const onDelta = (opts && typeof opts.onDelta === 'function') ? opts.onDelta : null;
+  const deepThink = !!(opts && opts.deepThink);
+  const emitThought = deepThink && typeof opts.onThought === 'function' ? opts.onThought : null;
+  const approvalMode = normalizeApprovalMode(opts && opts.approvalMode);
+  const onApproval = opts && typeof opts.onApproval === 'function' ? opts.onApproval : null;
+  const planMode = !!(opts && opts.planMode);
+  const attachments = Array.isArray(opts && opts.attachments) ? [...opts.attachments] : [];
+  for (const p of extractMentions(message)) {
+    if (!attachments.some((a) => a && (a.path === p || a.file === p))) attachments.push({ path: p });
+  }
+  const composerOpts = {
+    goal: (opts && opts.goal) || '',
+    outcomes: (opts && opts.outcomes) || '',
+    attachments,
+    images: Array.isArray(opts && opts.images) ? opts.images : [],
+    model: (opts && opts.model) || undefined,
+    reasoningEffort: (opts && opts.reasoningEffort) || undefined,
+  };
+
+  if (planMode) {
+    if (!llm.resolveConfig().apiKey) {
+      const reply = '📋 计划模式需要先配置 LLM；当前没有可用的模型配置。';
+      if (onDelta) onDelta(reply);
+      return { intent: 'plan', confidence: 1, reply, data: null, steps: [] };
+    }
+    return runPlanOnly(userId, message, { ...composerOpts, onDelta, emitThought });
+  }
 
   // ===== Agentic 路径（默认）：LLM 可用时走工具循环 =====
   const cfg = llm.resolveConfig();
   if (cfg.apiKey) {
-    const agentResult = await runAgentLoop(userId, message, { enableSearch, onDelta, onStep: opts.onStep });
+    const codexResult = await runCodexLoop(userId, message, {
+      enableSearch, deepThink, onDelta, onStep: opts.onStep, emitThought, approvalMode, onApproval, ...composerOpts,
+    });
+    if (codexResult) {
+      logger.info(`codex: "${message}" → ${codexResult.intent} (${(codexResult.steps || []).length} steps)`);
+      remember(userId, message, { intent: codexResult.intent });
+      return codexResult;
+    }
+    logger.warn('codex loop unavailable, falling back to plan loop');
+    const agentResult = await runAgentLoop(userId, message, {
+      enableSearch, deepThink, onDelta, onStep: opts.onStep, emitThought, approvalMode, onApproval, ...composerOpts,
+    });
     if (agentResult) {
       logger.info(`agent: "${message}" → ${agentResult.intent} (${(agentResult.steps || []).length} steps)`);
       remember(userId, message, { intent: agentResult.intent });
@@ -1239,6 +2155,9 @@ async function chat(userId, message, opts = {}) {
 
   // 写记忆（包括失败的情况也记，方便后续分析）
   remember(userId, message, intent);
+  if (emitThought) {
+    try { emitThought({ icon: '🧠', label: '意图识别', detail: `${intent.intent}（置信度 ${intent.confidence}）` }); } catch (_) {}
+  }
 
   // classify 失败（LLM 错误）→ 友好提示
   if (intent.error) {
@@ -1281,15 +2200,16 @@ async function chat(userId, message, opts = {}) {
   }
 
   if (intent.intent === 'chat') {
+    if (emitThought) { try { emitThought({ icon: '💬', label: '直接回答', detail: message.slice(0, 120) }); } catch (_) {} }
     // 直接 LLM 闲聊（流式）
     const sys = '你是 WorkBuddy 本地智能助手。如果用户是在管理待办/日程/提醒，请用对应能力完成；如果是普通问题（知识/闲聊/建议），直接自然回答，不要生硬推送功能。中文、简洁友好。';
     if (onDelta) {
       const r = await llm.chatStream(
         [
           { role: 'system', content: sys },
-          { role: 'user', content: message },
+          { role: 'user', content: buildUserContent(message, opts.images) },
         ],
-        { temperature: 0.7, max_tokens: 400, userId, intent: 'chat' },
+        { temperature: 0.7, max_tokens: 400, userId, intent: 'chat', model: opts.model },
         onDelta
       );
       return { intent: 'chat', confidence: 1, reply: r.ok ? r.text : '⚠️ ' + r.error, data: null };
@@ -1298,9 +2218,9 @@ async function chat(userId, message, opts = {}) {
     const r = await llm.chat(
       [
         { role: 'system', content: sys },
-        { role: 'user', content: message },
+        { role: 'user', content: buildUserContent(message, opts.images) },
       ],
-      { temperature: 0.7, max_tokens: 400, userId, intent: 'chat' }
+      { temperature: 0.7, max_tokens: 400, userId, intent: 'chat', model: opts.model }
     );
     return { intent: 'chat', confidence: 1, reply: r.ok ? r.text : '⚠️ ' + r.error, data: null };
   }
@@ -1308,7 +2228,12 @@ async function chat(userId, message, opts = {}) {
   const exec = await executeIntent(intent, userId, message, {
     onDelta,
     onStep: (opts && typeof opts.onStep === 'function') ? opts.onStep : null,
+    approvalMode,
+    onApproval,
   });
+  if (emitThought) {
+    try { emitThought({ icon: '🔧', label: '执行工具', detail: intent.intent }); } catch (_) {}
+  }
   // 工具类操作没有流式 LLM 输出 → 把 summary 作为一次性 delta 发出，保证前端能渲染
   if (onDelta && exec.summary && !exec._deltaSent) onDelta(exec.summary);
   return {
@@ -1352,6 +2277,9 @@ function remember(userId, message, intent) {
   } catch (e) {
     logger.warn('remember failed:', e.message);
   }
+  try {
+    require('./memory').logConversation(userId, message, intent && intent.intent);
+  } catch (_) {}
 }
 
 function getMemories(userId, limit = 10) {

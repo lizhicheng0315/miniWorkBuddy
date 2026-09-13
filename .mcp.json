@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "workbuddy": {
+      "command": "node",
+      "args": [
+        "scripts/workbuddy-mcp-server.js"
+      ],
+      "env": {}
+    }
+  }
+}

@@ -4,6 +4,8 @@ const express = require('express');
 const ai = require('../services/ai');
 const llm = require('../services/llm');
 const nlp = require('../services/nlp');
+const documents = require('../services/documents');
+const config = require('../config');
 const { requireAuth } = require('../middleware/auth');
 const router = express.Router();
 
@@ -12,6 +14,20 @@ router.use(requireAuth);
 router.get('/status', (req, res) => {
   const v = llm.getConfigView();
   res.json({ enabled: v.configured, ...v });
+});
+
+router.get('/documents/status', (req, res) => {
+  res.json(documents.status());
+});
+
+router.post('/documents/convert', express.raw({ type: '*/*', limit: config.documents.maxBytes }), async (req, res) => {
+  try {
+    const filename = String(req.query.name || req.headers['x-file-name'] || 'document');
+    const result = await documents.convertBuffer(req.body, { filename });
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message || '文档解析失败' });
+  }
 });
 
 // ===== LLM 配置（admin only） =====
@@ -135,7 +151,7 @@ router.post('/search', requireAuth, async (req, res) => {
 });
 
 router.post('/chat/stream', requireAuth, async (req, res) => {
-  const { message, enableSearch } = req.body || {};
+  const { message, enableSearch, deepThink, approvalMode, planMode, goal, outcomes, attachments, images, model } = req.body || {};
   if (!message || !String(message).trim()) {
     return res.status(400).json({ error: 'message 必填' });
   }
@@ -156,8 +172,18 @@ router.post('/chat/stream', requireAuth, async (req, res) => {
     // onStep 已实时推送工具转录，这里不再重复发送 result.steps
     const result = await nlp.chat(req.user.id, message, {
       enableSearch: !!enableSearch,
+      deepThink: !!deepThink,
+      approvalMode: approvalMode || 'ask',
+      planMode: !!planMode,
+      goal: goal || '',
+      outcomes: outcomes || '',
+      attachments: Array.isArray(attachments) ? attachments : [],
+      images: Array.isArray(images) ? images : [],
+      model: model || undefined,
       onDelta: (text) => write('delta', { text }),
       onStep: (step) => write('tool', step),
+      onThought: (step) => write('thought', step),
+      onApproval: (request) => write('approval', request),
     });
     write('intent', { intent: result.intent, confidence: result.confidence, data: result.data });
     write('done', { reply: result.reply });
@@ -167,6 +193,20 @@ router.post('/chat/stream', requireAuth, async (req, res) => {
     clearInterval(heartbeat);
     res.end();
   }
+});
+
+// ===== 对话内审批（请求批准 / 帮我批准） =====
+router.get('/approval/pending', requireAuth, (req, res) => {
+  const approvals = require('../services/approvals');
+  res.json({ items: approvals.listPending(req.user.id) });
+});
+
+router.post('/approval/:id', requireAuth, (req, res) => {
+  const approvals = require('../services/approvals');
+  const { approved, reason } = req.body || {};
+  const ok = approvals.resolve(req.user.id, req.params.id, !!approved, reason);
+  if (!ok) return res.status(404).json({ error: '审批项不存在或已过期' });
+  res.json({ ok: true, approved: !!approved });
 });
 
 router.post('/summarize', async (req, res) => {

@@ -9,14 +9,37 @@
 
 数据保存在本地 **SQLite** 文件（`./data/workbuddy.db`，通过 sql.js 纯 WASM 引擎），支持完整**备份 / 导入**。
 
+## 🆕 近期更新（2026-09）
+
+- **对话内 COT 链路**：Think、工具调用、批准与结果直接附着到对应回复，轨迹随消息持久化，历史会话可继续展开。
+- **MarkItDown 文档上下文**：对话输入区支持直接上传 PDF、Word、PPT、Excel、EPUB、HTML 和常见代码文本，服务端转换为 Markdown 后注入当前对话。
+- **Codex 式核心模块融合**：补齐 Computer Use、Browser Use、长期 Memory、Skills、Review、Worktree、MCP、后台任务和远程 handoff，并统一接入 Agent 工具循环。
+- **三档权限模式**：对话区弹层切换「请求批准 / 帮我批准 / 完全访问」，敏感操作可在消息内批准或拒绝。
+- **更紧凑的 Composer**：文件/文件夹/图片、目标和计划改为输入区状态与上拉面板，权限菜单不再占用页面主体。
+- **界面重构**：采用 porcelain / ink / jade / amber 的安静编辑式视觉，统一浅色与深色主题、原生控件和 PWA 主题色。
+- **移动端优化**：会话历史改为抽屉，工具台在桌面端停靠并为内容让位，`390×844` 视口无横向溢出。
+- **Playwright 验收链路**：项目本地安装并使用 `playwright-cli`，覆盖桌面端、移动端、上传和关键交互截图检查。
+
 ## ✨ 核心特性
 
 ### 🤖 Agent 式对话（核心界面）
 - **自然语言管理一切**：「明天下午3点开周会」「提醒我买牛奶」「每天9点写日报」「把买牛奶标记完成」
 - **Plan-then-Execute Agent 循环**：复合任务一句话完成——「创建待办'写周报'并每天9点提醒我」自动拆成两步工具调用
+- **Codex 式迭代工具循环**：模型逐步调用工具/技能 → 观察工具结果 → 继续决策，直到输出 final；比一次性计划更能自动应对截图、页面快照、沙箱命令等需要看结果再行动的场景
+- **沙箱执行策略**：`sandbox_read_file` / `sandbox_write_file` / `sandbox_list_dir` / `sandbox_git_status` / `sandbox_run` 默认只允许工作区读写，危险命令直接拒绝，所有操作写入 `data/logs/sandbox-*.jsonl` 审计
+- **三档权限模式**（对话输入框上方切换）：
+  - **请求批准**：敏感工具执行前 SSE 推送批准卡片，后端阻塞等待你点“批准/拒绝”
+  - **帮我批准**：沙箱内文件读写/查看自动放行，命令与 GUI 控制仍先询问
+  - **完全访问**：不再请求批准，沙箱限制放开为 `danger-full-access`，所有操作仍写审计日志
+- **代码审阅（仿 `/review`）**：Composer 的“代码审阅”动作会读取 git status + diff，由 LLM 按 P0/P1/P2 输出 findings，不修改工作区
+- **子代理（subagents）**：支持把独立调查/分析任务委派给只读子代理，子代理结果汇总回主对话
+- **Git worktrees**：`sandbox_git_worktree_list` / `sandbox_git_worktree_add` 支持查看和创建 worktree（创建需要允许命令或完全访问）
+- **MCP**：支持 stdio / streamable HTTP MCP servers，配置后 Agent 可通过 `mcp_list_tools` / `mcp_call` 使用外部工具
+- **Scheduled tasks（automations）**：cron + prompt 定时让 Agent 后台执行任务；支持启停、立即运行、运行历史
 - **可插拔工具注册表**：20+ 内置工具（待办/日程/提醒/日报/PPT/搜索），新增能力只需在 `TOOLS` 注册表加一项
 - **真流式输出**：LLM token 级 SSE 增量 + 打字机光标 + 节流渲染（长回复不卡顿）
-- **可见工具转录**：助手每执行一步操作，聊天里实时显示 🔧 步骤条（MiniCode transcript 风格）
+- **消息内 COT 链路**：Think、工具决策、批准与执行结果直接附着在回复中，历史会话可继续展开查看
+- **文档上下文**：支持 PDF / Word / PPT / Excel / EPUB / HTML / 代码等文件，服务端用 Microsoft MarkItDown 转成 Markdown 后注入对话
 
 ### 🌐 联网搜索
 - 对话里说「查一下XX」「XX是什么」自动触发
@@ -37,9 +60,11 @@
 - 中文数字页码识别：「第四页改为…」✅
 - 下载用 10 分钟一次性签名票据，无需暴露登录态
 
-### 🗣️ 语音模式
-- 🔊 语音播报：AI 回复自动 TTS 朗读（中文）
-- 🎤 语音输入：Web Speech API 听写，说完再点一次即发送
+### 📄 MarkItDown 文档上传
+- 在对话输入区点击「添加 → 选择文件」，可上传 PDF、Word、PowerPoint、Excel、EPUB、HTML 和常见文本/代码文件
+- 文档由微软 [MarkItDown](https://github.com/microsoft/markitdown) 转为 Markdown，转换结果作为当前对话上下文
+- 本地安装依赖：`npm run install:markitdown`
+- 默认单文件上限 25 MB，可通过 `MARKITDOWN_MAX_MB` 调整
 
 ### 💬 会话历史
 - 左栏会话列表：SQLite 持久化、首条消息自动命名、点击回放完整记录
@@ -51,6 +76,42 @@
 ### 📈 Token 用量统计
 按天/模型统计，指标卡 + SVG 平滑曲线图，数据落库可回溯。
 
+### 🖥️ Computer Use（电脑操作）
+- 窗口枚举、全屏/窗口截图、鼠标移动/单击/双击/右键、键盘输入（支持中文）、滚轮、激活窗口
+- 在对话右侧「工具台 → 电脑」里截图后可直接在图上点选坐标，或对自然语言说要助手"截屏 / 点哪里 / 输入什么"
+- 默认不开放任意命令；在工具台打开"允许命令"开关后才可以执行 PowerShell / 启动程序
+
+### 🌐 Browser Use（浏览器控制）
+- 用系统 **Edge / Chrome / Chromium** 的 CDP 协议驱动真实浏览器（零额外依赖，无需安装 Playwright）
+- 打开/导航网页、读取页面快照（链接/按钮/正文）、点击元素、输入中文、按键、滚动、截图
+- 对话里说"打开百度 / 在网页上找到 XXX / 点某个按钮"即可自动调度
+
+### 🧠 长期记忆
+- 结构化记忆：事实 / 偏好 / 习惯 / 事件 / 上下文，支持标签、重要度、置顶、过期
+- 每次对话自动召回相关记忆注入 Agent 上下文，跨会话记住你的偏好
+- 可在对话右侧「工具台 → 记忆」管理，或说"记住我每天 9 点开始工作" / "我有什么记得的"
+- 支持一键从最近对话中让 LLM 提炼值得长期保存的事实
+
+### ⚡ 技能区（仿 Codex skills）
+- 内置模板在项目根目录 `skills/<技能名>/SKILL.md`，首次启动自动复制到 `data/skills/`（pkg 单文件打包后也能编辑）
+- `data/skills/<技能名>/SKILL.md` 即一个正式技能，frontmatter 描述用途/适用场景
+- Agent 会在需要时自动选 `use_skill`；也可以在对话右侧「工具台 → 技能」编辑、新建、删除、发送到对话
+- 内置 `computer-use` / `browser-use` / `memory-manager` 三个示例技能
+
+## 🧩 作为 Codex 插件
+
+本项目同时是一个可被 Codex 加载的插件源码：
+
+- `.codex-plugin/plugin.json`：插件 manifest（名称 `workbuddy`、技能目录 `./skills/`、MCP 配置 `./.mcp.json`）
+- `.mcp.json`：把 WorkBuddy 暴露为 MCP stdio server，Codex 可调用它的 agent、会话、记忆、review、sandbox 工具
+- `npm run mcp-server`：启动 WorkBuddy MCP server
+
+校验插件 manifest：
+
+```bash
+python "$CODEX_HOME/skills/.system/plugin-creator/scripts/validate_plugin.py" .
+```
+
 ## 🛠️ 技术栈
 
 - Node.js 18+（已在 v24.9.0 测试）
@@ -60,6 +121,7 @@
 - openai（OpenAI 兼容 LLM 客户端，自带指数退避重试 + 超时）
 - **sql.js**（SQLite WASM 引擎，零原生编译）
 - **pptxgenjs**（原生 .pptx 生成，纯 JS）
+- Node 内置 WebSocket + CDP（Browser Use，Node >= 22；其余模块 Node 18+ 可用）
 - 原生 HTML/CSS/JS（无前端构建步骤）
 
 ## 🚀 快速开始
@@ -67,6 +129,9 @@
 ```bash
 # 1. 安装依赖
 npm install
+
+# 可选：安装本地 MarkItDown 文档解析依赖
+npm run install:markitdown
 
 # 2. 准备环境变量
 copy .env.example .env
@@ -101,6 +166,13 @@ npm start
 | `LLM_MODEL` | 模型名 | `deepseek-chat` |
 | `NOTIFY_SOUND` | 是否播放系统提示音 | `true` |
 | `BING_SEARCH_KEY` | 可选：Bing Web Search API key（不配则用 Bing HTML/DuckDuckGo） | — |
+| `COMPUTER_ALLOW_SHELL` | 是否允许执行 PowerShell 命令 / 启动程序（危险能力） | `false` |
+| `BROWSER_HEADLESS` | Browser Use 是否无头运行（不弹窗口） | `false` |
+| `BROWSER_EXECUTABLE` | 指定浏览器可执行文件路径（留空自动找 Edge/Chrome） | — |
+| `MARKITDOWN_PYTHON` | MarkItDown 使用的 Python 命令 | `python` |
+| `MARKITDOWN_HOME` | MarkItDown 本地安装目录 | `./.tools/markitdown` |
+| `MARKITDOWN_MAX_MB` | 单文件上传上限 | `25` |
+| `MARKITDOWN_TIMEOUT_MS` | 单文件转换超时 | `90000` |
 
 ### 接入其他 LLM
 
@@ -138,6 +210,10 @@ npm start
 | `GET` | `/api/ai/usage?days=7` | Token 用量统计（admin） |
 | `POST` | `/api/ai/search`  body: `{query}` | 联网搜索 |
 | `POST` | `/api/ai/chat/stream` | SSE 流式对话（真 token 级增量） |
+| `GET` | `/api/ai/approval/pending` | 当前会话待批准操作 |
+| `POST` | `/api/ai/approval/:id`  body: `{approved}` | 批准/拒绝工具执行 |
+| `GET` | `/api/ai/documents/status` | MarkItDown 安装状态与支持格式 |
+| `POST` | `/api/ai/documents/convert?name=...` | 上传原始文件并转换为 Markdown |
 
 ### PPT 助理
 
@@ -153,6 +229,56 @@ npm start
 | `GET / POST` | `/api/chathistory/sessions` | 会话列表 / 新建 |
 | `GET / POST` | `/api/chathistory/sessions/:id/messages` | 回放消息 / 追加消息 |
 | `PATCH / DELETE` | `/api/chathistory/sessions/:id` | 重命名 / 删除会话 |
+
+### 长期记忆
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET / POST` | `/api/memory` | 记忆列表（q/kind/pinned 过滤）/ 新建 |
+| `GET` | `/api/memory/stats` | 统计与最近事件 |
+| `GET` | `/api/memory/events` | 记住/回忆/提取操作流水 |
+| `POST` | `/api/memory/recall` | 关键词召回记忆（更新访问时间） |
+| `POST` | `/api/memory/extract`  body: `{messages}` | LLM 从对话提炼长期记忆 |
+| `GET / PATCH / DELETE` | `/api/memory/:id` | 单条记忆读/改/删 |
+| `POST` | `/api/memory/:id/pin` | 置顶/取消置顶 |
+
+### 技能区
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET / POST` | `/api/skills` | 技能列表 / 新建或更新 |
+| `GET / PATCH / DELETE` | `/api/skills/:name` | 读 / 改 / 删技能 |
+| `POST` | `/api/skills/:name/run`  body: `{task}` | 用 LLM 执行技能 |
+
+### Computer Use
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/computer/status` | 平台与"允许命令"状态 |
+| `GET` | `/api/computer/windows` | 可见窗口列表 |
+| `POST` | `/api/computer/screenshot` | 全屏或指定窗口截图 |
+| `POST` | `/api/computer/mouse` | 移动/单击/双击/右键（x,y,action） |
+| `POST` | `/api/computer/type` | 向当前焦点输入文本 |
+| `POST` | `/api/computer/key` | 发送按键（含 modifiers） |
+| `POST` | `/api/computer/scroll` | 滚轮滚动 |
+| `POST` | `/api/computer/activate` | 激活窗口 |
+| `POST` | `/api/computer/launch` / `run` | 启动程序 / PowerShell（**admin + 开关**） |
+| `PATCH` | `/api/computer/allow-shell` | 切换允许命令开关（admin） |
+
+### Browser Use
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/browser/status` | 运行状态 / 标签 / 可执行文件 |
+| `POST` | `/api/browser/start` | 启动受控浏览器（可带 url） |
+| `GET` | `/api/browser/tabs` | 标签页列表 |
+| `POST` | `/api/browser/open` / `navigate` | 新标签打开 / 当前标签导航 |
+| `POST` | `/api/browser/snapshot` | 页面快照（按钮/链接/正文） |
+| `POST` | `/api/browser/screenshot` | 标签页截图 |
+| `POST` | `/api/browser/click` / `type` / `key` / `scroll` | 点击 / 输入 / 按键 / 滚动 |
+| `POST` | `/api/browser/close` / `stop` | 关闭标签 / 停止浏览器 |
+
+截图文件统一走 `GET /api/media/screenshot?name=...&token=...`（仅登录用户可读）。
 
 ### 对接配置
 
@@ -220,13 +346,15 @@ npm start
 
 - 单文件 SQLite：`./data/workbuddy.db`（首次写入自动持久化）
 - WASM 文件：`./data/sql-wasm.wasm`（首次启动自动从 `node_modules` 复制）
-- 4 张表：`todos` / `schedule_events` / `reminders` / `settings`
+- 核心表：`todos` / `schedule_events` / `reminders` / `settings` / `users` / `chat_sessions` / `chat_messages` / `memory_items` / `memory_events`
 - 备份导出格式：包含 `version / exported_at / tables.*` 的 JSON 快照
 
 ## 📂 项目结构
 
 ```
 dsh/
+├── .codex-plugin/plugin.json # Codex 插件 manifest
+├── .mcp.json                 # WorkBuddy MCP server 配置
 ├── server.js                # 入口（async main 启动）
 ├── package.json
 ├── .env.example
@@ -244,7 +372,12 @@ dsh/
 │   │   ├── ai.js            # SSE 流式对话 + 用量统计
 │   │   ├── integrations.js  # 飞书/企微/钉钉对接配置
 │   │   ├── ppt.js           # 草稿查询 + 票据下载
-│   │   └── chathistory.js   # 会话历史 CRUD
+│   │   ├── chathistory.js   # 会话历史 CRUD
+│   │   ├── memory.js        # 长期记忆 API
+│   │   ├── skills.js        # 技能区 API
+│   │   ├── computer.js      # Computer Use API
+│   │   ├── browser.js       # Browser Use API
+│   │   └── media.js         # 截图鉴权下载
 │   └── services/
 │       ├── notifier.js / scheduler.js / backup.js
 │       ├── llm.js           # 带重试+超时的 LLM 客户端（chat/chatStream/getClient）
@@ -253,16 +386,29 @@ dsh/
 │       ├── websearch.js     # Bing HTML → DuckDuckGo 多引擎降级搜索
 │       ├── ppt.js           # PPT 草稿状态机 + pptxgenjs 导出
 │       ├── integration.js   # IM webhook 推送（加签支持）
-│       └── chatstore.js     # 会话历史持久化
+│       ├── chatstore.js     # 会话历史持久化
+│       ├── memory.js        # 长期记忆（召回/提取/事件流水）
+│       ├── skills.js        # SKILL.md 扫描/编辑/执行
+│       ├── computer.js      # PowerShell + user32 电脑控制
+│       ├── browser.js       # CDP 浏览器客户端
+│       └── media.js         # 截图文件管理
+├── skills/
+│   ├── computer-use/SKILL.md
+│   ├── browser-use/SKILL.md
+│   └── memory-manager/SKILL.md
 ├── scripts/
 │   ├── smoke.js             # 端到端 API 测试（12 场景）
+│   ├── test-codex-modules.js # memory/skills/computer/browser 冒烟
 │   ├── test-agent.js        # Agent 工具循环 mock 测试
 │   ├── test-markdown.js     # Markdown 渲染 + XSS 防护测试（11 例）
 │   ├── test-ppt.js          # PPT 导出真实文件测试
 │   └── test-pageno.js       # 中文数字页码测试
 └── data/                    # 运行后自动创建
     ├── workbuddy.db
-    └── ppt/                 # 生成的 PPTX 文件
+    ├── ppt/                 # 生成的 PPTX 文件
+    ├── screenshots/         # Computer/Browser 截图
+    ├── skills/              # 运行期技能（首次启动从 skills/ 复制）
+    └── browser-profile/     # 受控浏览器用户数据
 ```
 
 ## 🧪 测试
@@ -285,6 +431,9 @@ node scripts/test-markdown.js
 
 # 中文数字页码识别（第三页→3）
 node scripts/test-pageno.js
+
+# 新增 Codex 式模块（记忆/技能/电脑/浏览器）冒烟
+node scripts/test-codex-modules.js
 
 # PPT 真实导出（生成合法 .pptx 并校验 ZIP 头）
 node scripts/test-ppt.js

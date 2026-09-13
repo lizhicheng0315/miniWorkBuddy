@@ -11,9 +11,12 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "install:markitdown": "python -m pip install --target .tools/markitdown \"markitdown[all]\"",
     "build": "node scripts/build.js",
     "build:win": "node scripts/build.js --target win-x64",
-    "gen-cert": "node scripts/gen-cert.js"
+    "gen-cert": "node scripts/gen-cert.js",
+    "app-server": "node scripts/codex-app-server.js",
+    "mcp-server": "node scripts/workbuddy-mcp-server.js"
   },
   "bin": "server.js",
   "pkg": {
@@ -24,6 +27,7 @@
     "assets": [
       "node_modules/sql.js/dist/sql-wasm.wasm",
       "public/**/*",
+      "skills/**/*",
       "package.json"
     ],
     "targets": [

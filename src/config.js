@@ -33,11 +33,13 @@ const config = {
     baseURL: envStr('LLM_BASE_URL', 'https://api.deepseek.com/v1'),
     apiKey: envStr('LLM_API_KEY', ''),
     model: envStr('LLM_MODEL', 'deepseek-chat'),
+    reasoningEffort: envStr('LLM_REASONING_EFFORT', ''),
     timeoutMs: envInt('LLM_TIMEOUT_MS', 30000),
     maxRetries: envInt('LLM_MAX_RETRIES', 3),
   },
   notify: {
     sound: envBool('NOTIFY_SOUND', true),
+    tasks: envBool('NOTIFY_TASKS', true),
   },
   auth: {
     bootstrapUser: envStr('BOOTSTRAP_USER', 'admin'),
@@ -53,6 +55,20 @@ const config = {
     aiPerMin: envInt('RATELIMIT_AI', 30),
   },
   bingSearchKey: envStr('BING_SEARCH_KEY', ''),
+  computer: {
+    allowShell: envBool('COMPUTER_ALLOW_SHELL', false),
+  },
+  browser: {
+    headless: envBool('BROWSER_HEADLESS', false),
+    executable: envStr('BROWSER_EXECUTABLE', ''),
+  },
+  documents: {
+    python: envStr('MARKITDOWN_PYTHON', 'python'),
+    home: envStr('MARKITDOWN_HOME', path.join(root, '.tools', 'markitdown')),
+    maxBytes: envInt('MARKITDOWN_MAX_MB', 25) * 1024 * 1024,
+    timeoutMs: envInt('MARKITDOWN_TIMEOUT_MS', 90_000),
+    maxChars: envInt('MARKITDOWN_MAX_CHARS', 120_000),
+  },
   tls: {
     enabled: envBool('TLS_ENABLED', false),
     key: envStr('TLS_KEY', './certs/server.key'),
