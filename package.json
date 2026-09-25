@@ -16,7 +16,9 @@
     "build:win": "node scripts/build.js --target win-x64",
     "gen-cert": "node scripts/gen-cert.js",
     "app-server": "node scripts/codex-app-server.js",
-    "mcp-server": "node scripts/workbuddy-mcp-server.js"
+    "mcp-server": "node scripts/workbuddy-mcp-server.js",
+    "test:news": "node scripts/test-news.js",
+    "test:plan": "node scripts/test-plan.js"
   },
   "bin": "server.js",
   "pkg": {
@@ -25,8 +27,8 @@
       "src/**/*.js"
     ],
     "assets": [
-      "node_modules/sql.js/dist/sql-wasm.wasm",
       "public/**/*",
+      "src/data/*.json",
       "skills/**/*",
       "package.json"
     ],

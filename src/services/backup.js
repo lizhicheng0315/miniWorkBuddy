@@ -8,6 +8,7 @@ const db = require('../db');
 const logger = require('../logger');
 
 function exportSnapshot(userId) {
+  require('./plan').ensureTables();
   const filter = userId != null ? (r) => r.user_id === userId : null;
   return {
     version: 2,
@@ -17,6 +18,8 @@ function exportSnapshot(userId) {
       todos: filter ? db.list('todos', filter) : db.list('todos'),
       schedule_events: filter ? db.list('schedule_events', filter) : db.list('schedule_events'),
       reminders: filter ? db.list('reminders', filter) : db.list('reminders'),
+      plan_goals: filter ? db.list('plan_goals', filter) : db.list('plan_goals'),
+      plan_tasks: filter ? db.list('plan_tasks', filter) : db.list('plan_tasks'),
       settings: filter ? db.list('settings', filter) : db.list('settings'),
     },
   };
@@ -30,7 +33,7 @@ function importSnapshot(snapshot, mode, userId) {
 
 function replaceSnapshot(snapshot, userId) {
   // 删除当前用户的全部数据
-  for (const t of ['todos', 'schedule_events', 'reminders', 'settings']) {
+  for (const t of ['todos', 'schedule_events', 'reminders', 'plan_tasks', 'plan_goals', 'settings']) {
     if (userId != null) {
       db.rawDb().run(`DELETE FROM ${t} WHERE user_id = ?`, [userId]);
     } else {
@@ -43,7 +46,7 @@ function replaceSnapshot(snapshot, userId) {
 }
 
 function mergeSnapshot(snapshot, userId) {
-  const counts = { todos: 0, schedule_events: 0, reminders: 0, settings: 0 };
+  const counts = { todos: 0, schedule_events: 0, reminders: 0, plan_goals: 0, plan_tasks: 0, settings: 0 };
   const t = snapshot.tables;
   const uid = userId;
   for (const row of t.todos || []) {
@@ -73,6 +76,31 @@ function mergeSnapshot(snapshot, userId) {
       counts.reminders++;
     }
   }
+  const goalIdMap = new Map();
+  for (const row of t.plan_goals || []) {
+    const existing = db.list('plan_goals', (item) => item.month === row.month && item.title === row.title, uid)[0];
+    if (existing) {
+      goalIdMap.set(row.id, existing.id);
+    } else {
+      const copy = { ...row };
+      delete copy.id;
+      copy.user_id = uid;
+      const inserted = db.insert('plan_goals', copy);
+      goalIdMap.set(row.id, inserted.id);
+      counts.plan_goals++;
+    }
+  }
+  for (const row of t.plan_tasks || []) {
+    const existing = db.list('plan_tasks', (item) => item.week_start === row.week_start && item.title === row.title, uid)[0];
+    if (!existing) {
+      const copy = { ...row };
+      delete copy.id;
+      copy.user_id = uid;
+      copy.goal_id = goalIdMap.get(row.goal_id) || null;
+      db.insert('plan_tasks', copy);
+      counts.plan_tasks++;
+    }
+  }
   for (const row of t.settings || []) {
     if (db.getSetting(row.key, uid) == null) {
       db.setSetting(row.key, row.value, uid);
@@ -84,7 +112,7 @@ function mergeSnapshot(snapshot, userId) {
 }
 
 function insertSnapshot(snapshot, userId) {
-  const counts = { todos: 0, schedule_events: 0, reminders: 0, settings: 0 };
+  const counts = { todos: 0, schedule_events: 0, reminders: 0, plan_goals: 0, plan_tasks: 0, settings: 0 };
   const uid = userId;
   for (const row of snapshot.tables.todos || []) {
     const copy = { ...row };
@@ -106,6 +134,23 @@ function insertSnapshot(snapshot, userId) {
     copy.user_id = uid;
     db.insert('reminders', copy);
     counts.reminders++;
+  }
+  const goalIdMap = new Map();
+  for (const row of snapshot.tables.plan_goals || []) {
+    const copy = { ...row };
+    delete copy.id;
+    copy.user_id = uid;
+    const inserted = db.insert('plan_goals', copy);
+    goalIdMap.set(row.id, inserted.id);
+    counts.plan_goals++;
+  }
+  for (const row of snapshot.tables.plan_tasks || []) {
+    const copy = { ...row };
+    delete copy.id;
+    copy.user_id = uid;
+    copy.goal_id = goalIdMap.get(row.goal_id) || null;
+    db.insert('plan_tasks', copy);
+    counts.plan_tasks++;
   }
   for (const row of snapshot.tables.settings || []) {
     db.setSetting(row.key, row.value, uid);

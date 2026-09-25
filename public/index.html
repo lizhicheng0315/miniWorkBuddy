@@ -7,8 +7,7 @@
     <title>WorkBuddy 助手</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-<link rel="stylesheet" href="styles.css?v=56" />
-    <link rel="stylesheet" href="theme.css?v=17" />
+    <link rel="stylesheet" href="styles.css?v=71" />
   </head>
   <body>
     <script>
@@ -39,20 +38,51 @@
     <header class="topbar">
       <div class="brand"><span class="brand-ico" aria-hidden="true">W</span> WorkBuddy</div>
       <nav class="tabs">
-        <button class="tab active" data-tab="chat">对话</button>
-        <button class="tab" data-tab="todos">待办</button>
+        <button class="tab active" data-tab="home">首页</button>
+        <button class="tab" data-tab="chat">对话</button>
+        <button class="tab" data-tab="plan">计划</button>
+        <button class="tab" data-tab="news">新闻</button>
         <button class="tab" data-tab="schedule">日程</button>
-        <button class="tab" data-tab="reminders">提醒</button>
-        <button class="tab" data-tab="ai">LLM</button>
+        <button class="tab" data-tab="reminders">定时</button>
+        <button class="tab" data-tab="ai">设置</button>
       </nav>
       <div class="status">
-        <span id="userInfo">—</span>
         <span id="llmStatus">LLM 检测中…</span>
         <button id="btnLogout" class="small">登出</button>
       </div>
     </header>
 
     <main>
+      <!-- 首页 -->
+      <section class="panel active" id="panel-home">
+        <div class="home-hero">
+          <div>
+            <span class="plan-eyebrow">个人工作台</span>
+            <h2 id="homeGreeting">今日工作台</h2>
+            <p class="muted" id="homeDate"></p>
+          </div>
+        </div>
+        <div class="home-metrics" id="homeMetrics"></div>
+        <div class="home-grid">
+          <section class="home-panel">
+            <div class="home-panel-head"><span>今日待办</span><strong id="homeTodoCount">0/0</strong></div>
+            <div id="homeTodoList" class="home-list"></div>
+          </section>
+          <section class="home-panel">
+            <div class="home-panel-head"><span>计划进度</span><strong id="homePlanProgress">0%</strong></div>
+            <div id="homePlanList" class="home-list"></div>
+          </section>
+          <section class="home-panel">
+            <div class="home-panel-head"><span>资讯板块</span><strong id="homeNewsCount">0</strong></div>
+            <div id="homeNewsList" class="home-list"></div>
+          </section>
+          <section class="home-panel">
+            <div class="home-panel-head"><span>接下来</span><strong id="homeScheduleCount">0</strong></div>
+            <div id="homeScheduleList" class="home-list"></div>
+          </section>
+        </div>
+      </section>
+
       <!-- 待办 -->
       <section class="panel" id="panel-todos">
         <div class="row">
@@ -230,10 +260,187 @@
         <div id="eventList" class="list hidden"></div>
       </section>
 
+      <div class="plan-view-tabs hidden" id="planViewTabs" role="tablist" aria-label="计划视图">
+        <button class="plan-view-tab active" data-plan-view="board" role="tab" aria-selected="true">计划看板</button>
+        <button class="plan-view-tab" data-plan-view="todos" role="tab" aria-selected="false">全部待办</button>
+      </div>
+
+      <!-- 计划工作台 -->
+      <section class="panel" id="panel-plan">
+        <div class="plan-head">
+          <div>
+            <span class="plan-eyebrow">月度计划</span>
+            <h2>计划工作台</h2>
+            <p class="muted" id="planSubtitle">月目标 → 周任务 → 每日待办</p>
+          </div>
+          <div class="plan-toolbar">
+            <input type="month" id="planMonth" aria-label="选择月份" />
+            <button id="btnPlanRollover">顺延逾期</button>
+            <button class="primary" id="btnPlanGoalNew">+ 月目标</button>
+          </div>
+        </div>
+
+        <div id="planMetrics" class="plan-metrics"></div>
+
+        <div class="plan-workbench">
+          <section class="plan-column plan-goals-column">
+            <div class="plan-column-head">
+              <div>
+                <span class="plan-kicker">目标</span>
+                <h3>月目标</h3>
+              </div>
+              <button class="ghost small" id="btnPlanGoalInline">+ 目标</button>
+            </div>
+            <div id="planGoalList" class="plan-goal-list"></div>
+          </section>
+
+          <section class="plan-column plan-weeks-column">
+            <div class="plan-column-head">
+              <div>
+                <span class="plan-kicker">执行</span>
+                <h3>周任务</h3>
+              </div>
+              <span class="muted" id="planWeekRange"></span>
+            </div>
+            <div id="planWeekBoard" class="plan-week-board"></div>
+          </section>
+
+          <aside class="plan-column plan-today-column">
+            <div class="plan-column-head">
+              <div>
+                <span class="plan-kicker">今天</span>
+                <h3>每日待办</h3>
+              </div>
+              <span class="muted" id="planTodayCount">0 项</span>
+            </div>
+            <form id="planTodoForm" class="plan-todo-form" autocomplete="off">
+              <input id="planTodoTitle" placeholder="添加今日待办" required />
+              <select id="planTodoTask" aria-label="关联周任务"></select>
+              <select id="planTodoPriority" aria-label="优先级">
+                <option value="2">中</option>
+                <option value="1">高</option>
+                <option value="3">低</option>
+              </select>
+              <button class="primary small" type="submit">添加</button>
+            </form>
+            <div id="planTodayList" class="plan-today-list"></div>
+            <div id="planInsights" class="plan-insights"></div>
+          </aside>
+        </div>
+
+        <form id="planGoalForm" class="card form hidden" autocomplete="off">
+          <input type="hidden" id="planGoalId" />
+          <div class="grid">
+            <label>目标名称 <input id="planGoalTitle" required placeholder="例如：完成产品第一版" /></label>
+            <label>月份 <input id="planGoalMonth" type="month" required /></label>
+            <label>截止日期 <input id="planGoalDue" type="date" /></label>
+            <label>权重 <input id="planGoalWeight" type="number" min="1" max="10" value="1" /></label>
+            <label>手动进度 <input id="planGoalProgress" type="number" min="0" max="100" value="0" /></label>
+          </div>
+          <label>描述 <textarea id="planGoalDesc" rows="3" placeholder="完成定义、验收标准或关键约束"></textarea></label>
+          <div class="actions">
+            <button class="primary" type="submit">保存月目标</button>
+            <button type="button" id="planGoalCancel">取消</button>
+            <button class="danger hidden" type="button" id="planGoalDelete">删除</button>
+          </div>
+        </form>
+
+        <form id="planTaskForm" class="card form hidden" autocomplete="off">
+          <input type="hidden" id="planTaskId" />
+          <div class="grid">
+            <label>任务名称 <input id="planTaskTitle" required placeholder="例如：完成核心流程原型" /></label>
+            <label>所属月目标 <select id="planTaskGoal"></select></label>
+            <label>周起始 <input id="planTaskWeek" type="date" required /></label>
+            <label>截止日期 <input id="planTaskDue" type="date" /></label>
+            <label>预估分钟 <input id="planTaskEstimate" type="number" min="0" value="120" /></label>
+            <label>状态
+              <select id="planTaskStatus">
+                <option value="open">进行中</option>
+                <option value="done">已完成</option>
+                <option value="cancelled">已取消</option>
+              </select>
+            </label>
+            <label>手动进度 <input id="planTaskProgress" type="number" min="0" max="100" value="0" /></label>
+          </div>
+          <label>描述 <textarea id="planTaskDesc" rows="3" placeholder="任务范围、产出物或依赖"></textarea></label>
+          <div class="actions">
+            <button class="primary" type="submit">保存周任务</button>
+            <button type="button" id="planTaskCancel">取消</button>
+            <button class="danger hidden" type="button" id="planTaskDelete">删除</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- 新闻 -->
+      <section class="panel" id="panel-news">
+        <div class="row">
+          <div>
+            <h2>新闻</h2>
+            <p class="muted news-status" id="newsStatus">加载信息源…</p>
+          </div>
+          <div class="row-right">
+            <button id="btnNewsRefresh">刷新</button>
+            <button class="primary" id="btnNewsNew">+ 新建板块</button>
+          </div>
+        </div>
+
+        <div class="news-board-strip">
+          <div class="news-board-tabs" id="newsBoardTabs"></div>
+          <div class="news-board-actions">
+            <button class="small" id="btnNewsConfigure">配置板块</button>
+            <button class="small" id="btnNewsSendChat">发到对话</button>
+          </div>
+        </div>
+
+        <form id="newsBoardForm" class="card form hidden" autocomplete="off">
+          <input type="hidden" id="newsBoardId" />
+          <div class="grid">
+            <label>板块名称 <input id="newsBoardName" required placeholder="例如：AI 每日观察" /></label>
+            <label>模板
+              <select id="newsTemplate">
+                <option value="">自定义</option>
+              </select>
+            </label>
+            <label>每次条数 <input id="newsLimit" type="number" min="3" max="50" value="12" /></label>
+            <label>推送时间
+              <select id="newsSchedule">
+                <option value="">仅手动刷新</option>
+                <option value="0 8 * * *">每天 08:00</option>
+                <option value="30 8 * * 1-5">工作日 08:30</option>
+                <option value="0 18 * * *">每天 18:00</option>
+                <option value="custom">自定义 Cron</option>
+              </select>
+            </label>
+            <label id="newsCronWrap" class="hidden">自定义 Cron <input id="newsCron" placeholder="0 8 * * *" /></label>
+          </div>
+          <div class="news-form-block">
+            <div class="news-form-title">信息源</div>
+            <div class="news-source-grid" id="newsSources"></div>
+          </div>
+          <div class="grid">
+            <label>包含关键词 <input id="newsInclude" placeholder="AI, 开源, 芯片（逗号分隔）" /></label>
+            <label>排除关键词 <input id="newsExclude" placeholder="广告, 推广（逗号分隔）" /></label>
+          </div>
+          <div class="actions">
+            <button type="submit" class="primary">保存板块</button>
+            <button type="button" id="newsFormCancel">取消</button>
+            <button type="button" class="danger" id="btnNewsDelete">删除板块</button>
+          </div>
+        </form>
+
+        <div class="news-board-note" id="newsBoardNote"></div>
+        <div class="news-feed" id="newsFeed">
+          <div class="news-empty">
+            <strong>正在准备新闻源</strong>
+            <span>首次刷新可能需要几秒。</span>
+          </div>
+        </div>
+      </section>
+
       <!-- 提醒 -->
       <section class="panel" id="panel-reminders">
         <div class="row">
-          <h2>提醒与自动化</h2>
+          <h2>定时与自动化</h2>
           <button class="primary" id="btnRemNew">+ 新建提醒</button>
         </div>
         <div class="rem-tabs">
@@ -293,11 +500,20 @@
       <!-- 对话（核心界面） -->
       <section class="panel active" id="panel-chat">
         <div class="history-backdrop hidden" id="historyBackdrop"></div>
-        <!-- 左侧会话历史 -->
+        <!-- 右侧会话历史 -->
         <aside class="chat-history" id="chatHistory">
           <button class="history-close ghost small" id="btnHistoryClose" title="关闭会话列表">✕</button>
           <button class="primary new-chat-btn" id="btnNewChat">＋ 新对话</button>
-          <input id="sessionSearch" class="session-search" placeholder="搜索会话…" autocomplete="off" />
+          <div
+            id="sessionSearch"
+            class="session-search"
+            role="searchbox"
+            contenteditable="true"
+            tabindex="0"
+            spellcheck="false"
+            aria-label="搜索会话"
+            data-placeholder="搜索会话…"
+          ></div>
           <div class="session-list" id="sessionList"><div class="muted session-empty">加载中…</div></div>
         </aside>
 
@@ -314,16 +530,15 @@
               <select id="chatModel" class="model-select" title="模型">
                 <option value="">默认模型</option>
               </select>
-              <button id="btnDeepThink" class="ghost small toggle-btn premium-toggle" title="深度思考：展示思考链路" aria-pressed="false">
-                <span class="toggle-dot"></span> Think
+              <button id="btnDeepThink" class="ghost small toggle-btn premium-toggle" title="深度思考：展示思考链路" aria-pressed="false" data-icon="🧠">
+                <span class="toggle-dot"></span><span class="toggle-label">Think</span>
               </button>
-              <button id="btnToolkitToggle" class="ghost small toggle-btn" title="打开助手工具台" aria-expanded="false">
-                <span class="toggle-dot"></span> 工具
+              <button id="btnToolkitToggle" class="ghost small toggle-btn" title="打开助手工具台" aria-expanded="false" data-icon="🛠">
+                <span class="toggle-dot"></span><span class="toggle-label">工具</span>
               </button>
-              <button id="btnWebSearchToggle" class="ghost small toggle-btn" title="联网搜索开关" aria-pressed="false">
-                <span class="toggle-dot"></span> 联网
+              <button id="btnWebSearchToggle" class="ghost small toggle-btn" title="联网搜索开关" aria-pressed="false" data-icon="🌐">
+                <span class="toggle-dot"></span><span class="toggle-label">联网</span>
               </button>
-              <button id="btnChatClear" class="ghost small" title="清空对话">清空</button>
               <button id="btnChatStop" class="ghost small hidden" title="停止生成">⏹ 停止</button>
             </div>
           </div>
@@ -338,6 +553,9 @@
                 <button class="chip" data-sample="每天9点提醒我写日报">⏰ 每天9点写日报</button>
                 <button class="chip" data-sample="我今天还有什么没做">📋 我今天还有什么没做</button>
                 <button class="chip" data-sample="生成今日日报">📝 生成今日日报</button>
+                <button class="chip" data-sample="把本月目标拆成周任务和每日待办">🧭 拆解月目标</button>
+                <button class="chip" data-sample="今天有哪些科技新闻">📰 今日科技新闻</button>
+                <button class="chip" data-sample="每天8点推送科技新闻">⏰ 订阅科技新闻</button>
                 <button class="chip" data-sample="把买牛奶标记完成">✔️ 把买牛奶标记完成</button>
                 <button class="chip" data-sample="记住我每天9点开始工作">🧠 记住我的习惯</button>
                 <button class="chip" data-sample="打开百度首页">🌐 打开浏览器</button>
@@ -370,7 +588,7 @@
               <textarea id="chatInput" rows="1" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
               <button class="primary send" id="btnChatSend" title="发送">发送 ↑</button>
             </div>
-            <div class="chat-input-hint" id="chatHint">
+            <div class="chat-input-hint">
               <button id="btnCommandPalette" class="command-shortcut" title="命令面板 (Ctrl+K)">⌘K</button>
               <span>Enter 发送 · Shift+Enter 换行</span>
             </div>
@@ -387,16 +605,12 @@
             <button id="btnTkClose" class="ghost small" title="收起工具台">✕</button>
           </div>
 
-          <div class="tk-modes">
-            <button class="tk-mode active" data-tk-mode="think">🧠 思考</button>
-            <button class="tk-mode" data-tk-mode="computer">🖥 电脑</button>
-            <button class="tk-mode" data-tk-mode="browser">🌐 浏览器</button>
-            <button class="tk-mode" data-tk-mode="memory">记忆</button>
-            <button class="tk-mode" data-tk-mode="review">🔍 审阅</button>
-            <button class="tk-mode" data-tk-mode="workspace">🗂 工作区</button>
-            <button class="tk-mode" data-tk-mode="tasks">🚀 任务</button>
-            <button class="tk-mode" data-tk-mode="remote">🌐 远程</button>
-            <button class="tk-mode" data-tk-mode="skills">⚡ 技能</button>
+          <div class="tk-modes" role="tablist" aria-label="工具类别">
+            <button class="tk-mode active" data-tk-mode="think" role="tab" aria-selected="true">思路</button>
+            <button class="tk-mode" data-tk-mode="devices" role="tab" aria-selected="false">设备</button>
+            <button class="tk-mode" data-tk-mode="memory" role="tab" aria-selected="false">记忆</button>
+            <button class="tk-mode" data-tk-mode="workbench" role="tab" aria-selected="false">工作台</button>
+            <button class="tk-mode" data-tk-mode="skills" role="tab" aria-selected="false">技能</button>
           </div>
 
           <div class="tk-pane active" id="tk-pane-think">
@@ -410,7 +624,13 @@
             <div class="tk-tip">思考步骤会在对话过程中实时写入，完成后保留在当前会话。</div>
           </div>
 
-          <div class="tk-pane" id="tk-pane-computer">
+          <div class="tk-pane" id="tk-pane-devices" role="tabpanel">
+            <div class="tk-subnav" role="tablist" aria-label="设备工具">
+              <button class="tk-submode active" data-tk-submode="computer" role="tab" aria-selected="true">电脑</button>
+              <button class="tk-submode" data-tk-submode="browser" role="tab" aria-selected="false">浏览器</button>
+            </div>
+
+          <div class="tk-subpane active" id="tk-sub-computer" role="tabpanel">
             <div class="tk-pane-head"><span>电脑</span></div>
             <div class="cap-section">
               <div class="cap-row">
@@ -464,7 +684,7 @@
             </div>
           </div>
 
-          <div class="tk-pane" id="tk-pane-browser">
+          <div class="tk-subpane" id="tk-sub-browser" role="tabpanel">
             <div class="tk-pane-head"><span>浏览器</span></div>
             <div class="cap-section">
               <div class="cap-row">
@@ -499,6 +719,7 @@
                 <div class="shot-empty">打开页面后点「截图」</div>
               </div>
             </div>
+          </div>
           </div>
 
           <div class="tk-pane" id="tk-pane-memory">
@@ -536,7 +757,15 @@
             </div>
           </div>
 
-          <div class="tk-pane" id="tk-pane-review">
+          <div class="tk-pane" id="tk-pane-workbench" role="tabpanel">
+            <div class="tk-subnav tk-subnav-4" role="tablist" aria-label="工作台工具">
+              <button class="tk-submode active" data-tk-submode="review" role="tab" aria-selected="true">审阅</button>
+              <button class="tk-submode" data-tk-submode="workspace" role="tab" aria-selected="false">工作区</button>
+              <button class="tk-submode" data-tk-submode="tasks" role="tab" aria-selected="false">任务</button>
+              <button class="tk-submode" data-tk-submode="remote" role="tab" aria-selected="false">远程</button>
+            </div>
+
+          <div class="tk-subpane active" id="tk-sub-review" role="tabpanel">
             <div class="tk-pane-head">
               <span>代码审阅</span>
               <button id="btnReviewRun" class="primary small">审阅变更</button>
@@ -551,7 +780,7 @@
             <pre id="reviewResult" class="computer-output"></pre>
           </div>
 
-          <div class="tk-pane" id="tk-pane-workspace">
+          <div class="tk-subpane" id="tk-sub-workspace" role="tabpanel">
             <div class="tk-pane-head">
               <span>工作区</span>
               <button id="btnWorktreeRefresh" class="small">刷新</button>
@@ -580,7 +809,7 @@
             </div>
           </div>
 
-          <div class="tk-pane" id="tk-pane-tasks">
+          <div class="tk-subpane" id="tk-sub-tasks" role="tabpanel">
             <div class="tk-pane-head">
               <span>后台任务</span>
               <button id="btnTasksRefresh" class="small">刷新</button>
@@ -597,7 +826,7 @@
             <div id="taskList" class="list"></div>
           </div>
 
-          <div class="tk-pane" id="tk-pane-remote">
+          <div class="tk-subpane" id="tk-sub-remote" role="tabpanel">
             <div class="tk-pane-head">
               <span>远程主机</span>
               <button id="btnRemoteRefresh" class="small">刷新</button>
@@ -616,6 +845,7 @@
             </div>
             <div id="remoteList" class="list"></div>
             <pre id="remoteOutput" class="computer-output"></pre>
+          </div>
           </div>
 
           <div class="tk-pane" id="tk-pane-skills">
@@ -675,7 +905,7 @@
         </div>
 
         <!-- LLM 配置（admin only） -->
-        <div class="card" id="llmConfigCard">
+        <div class="card">
           <div class="row">
             <h3>连接设置</h3>
             <span class="muted" id="llmConfigBadge">—</span>
@@ -754,7 +984,7 @@
           </div>
 
           <!-- 新增 / 编辑表单 -->
-          <form id="integrationForm" class="form integration-form" autocomplete="off">
+          <form class="form integration-form" autocomplete="off">
             <div class="grid">
               <label>渠道
                 <select id="intChannel">
@@ -861,7 +1091,7 @@
       </section>
     </main>
 
-<script defer src="app.js?v=89"></script>
+<script defer src="app.js?v=105"></script>
     <script>
       // ?nosw=1 临时禁用 Service Worker（用于诊断缓存问题）
       if (!location.search.includes('nosw=1') && 'serviceWorker' in navigator) {

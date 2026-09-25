@@ -28,6 +28,8 @@ router.get('/stats', (req, res) => {
       todos: (snap.tables.todos || []).length,
       schedule_events: (snap.tables.schedule_events || []).length,
       reminders: (snap.tables.reminders || []).length,
+      plan_goals: (snap.tables.plan_goals || []).length,
+      plan_tasks: (snap.tables.plan_tasks || []).length,
       settings: (snap.tables.settings || []).length,
     },
   });

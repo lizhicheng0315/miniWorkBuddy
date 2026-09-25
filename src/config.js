@@ -69,6 +69,12 @@ const config = {
     timeoutMs: envInt('MARKITDOWN_TIMEOUT_MS', 90_000),
     maxChars: envInt('MARKITDOWN_MAX_CHARS', 120_000),
   },
+  news: {
+    timeoutMs: envInt('NEWS_TIMEOUT_MS', 12_000),
+    cacheTtlMs: envInt('NEWS_CACHE_TTL_MS', 10 * 60_000),
+    concurrency: envInt('NEWS_CONCURRENCY', 4),
+    userAgent: envStr('NEWS_USER_AGENT', 'WorkBuddy/0.1 (+local news reader)'),
+  },
   tls: {
     enabled: envBool('TLS_ENABLED', false),
     key: envStr('TLS_KEY', './certs/server.key'),

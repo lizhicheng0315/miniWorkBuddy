@@ -11,6 +11,8 @@ const mcp = require('../services/mcp');
 const skills = require('../services/skills');
 const memory = require('../services/memory');
 const automations = require('../services/automations');
+const news = require('../services/news');
+const plan = require('../services/plan');
 const tasks = require('../services/tasks');
 const { requireAuth } = require('../middleware/auth');
 
@@ -28,6 +30,21 @@ router.get('/', async (req, res) => {
   try { out.skills = { count: skills.list().length }; } catch (e) { out.skills = { error: e.message }; }
   try { out.memory = memory.getStats(userId); } catch (e) { out.memory = { error: e.message }; }
   try { out.automations = automations.stats(userId); } catch (e) { out.automations = { error: e.message }; }
+  try {
+    news.ensureTables();
+    const catalog = news.publicCatalog();
+    const rows = db.query('SELECT COUNT(*) AS count FROM news_boards WHERE user_id = ?', [Number(userId)]);
+    out.news = {
+      sources: catalog.sources.length,
+      templates: catalog.templates.length,
+      boards: rows[0]?.count || 0,
+    };
+  } catch (e) { out.news = { error: e.message }; }
+  try {
+    plan.ensureTables();
+    const data = plan.dashboard(userId);
+    out.plan = data.metrics;
+  } catch (e) { out.plan = { error: e.message }; }
   try { out.tasks = { count: tasks.list(userId, { limit: 200 }).length }; } catch (e) { out.tasks = { error: e.message }; }
   try { out.sessions = { count: chatstore.listSessions(userId).length }; } catch (e) { out.sessions = { error: e.message }; }
   res.json(out);

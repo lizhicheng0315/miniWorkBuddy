@@ -21,6 +21,14 @@ function notifyDone(title, message) {
 const jobs = new Map();
 const running = new Set();
 
+function addColumnIfMissing(table, column, definition) {
+  try {
+    const result = db.rawDb().exec(`PRAGMA table_info(${table})`);
+    const names = (result[0]?.values || []).map((row) => row[1]);
+    if (!names.includes(column)) db.rawDb().run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  } catch (_) {}
+}
+
 function ensureTables() {
   db.rawDb().run(`
     CREATE TABLE IF NOT EXISTS automations (
@@ -31,6 +39,8 @@ function ensureTables() {
       cron TEXT NOT NULL,
       enabled INTEGER DEFAULT 1,
       run_mode TEXT DEFAULT 'local',
+      kind TEXT DEFAULT 'agent',
+      payload TEXT DEFAULT '{}',
       last_run_at TEXT,
       last_status TEXT,
       last_result TEXT,
@@ -48,6 +58,8 @@ function ensureTables() {
     CREATE INDEX IF NOT EXISTS idx_automations_user ON automations(user_id, enabled);
     CREATE INDEX IF NOT EXISTS idx_automation_runs ON automation_runs(automation_id, id);
   `);
+  addColumnIfMissing('automations', 'kind', "TEXT DEFAULT 'agent'");
+  addColumnIfMissing('automations', 'payload', "TEXT DEFAULT '{}'");
 }
 
 function lastId() {
@@ -56,7 +68,16 @@ function lastId() {
 }
 
 function mapRow(r) {
-  return { ...r, enabled: !!r.enabled };
+  let payload = {};
+  try {
+    payload = JSON.parse(String(r.payload || '{}'));
+  } catch (_) {}
+  return {
+    ...r,
+    enabled: !!r.enabled,
+    kind: r.kind || 'agent',
+    payload: payload && typeof payload === 'object' ? payload : {},
+  };
 }
 
 function get(userId, id) {
@@ -107,6 +128,8 @@ function duplicate(userId, id) {
     cron: src.cron,
     enabled: false,
     run_mode: src.run_mode,
+    kind: src.kind,
+    payload: src.payload,
   });
   return created;
 }
@@ -116,13 +139,18 @@ function create(userId, data = {}) {
   const name = String(data.name || '').trim().slice(0, 80);
   const prompt = String(data.prompt || '').trim().slice(0, 4000);
   const expr = String(data.cron || '').trim();
+  const kind = data.kind === 'news_digest' ? 'news_digest' : 'agent';
+  const payload = JSON.stringify(data.payload && typeof data.payload === 'object' ? data.payload : {});
   if (!name || !prompt || !expr) throw new Error('name / prompt / cron 必填');
   if (!cron.validate(expr)) throw new Error('cron 表达式无效');
   const now = db.nowIso();
   db.rawDb().run(
-    `INSERT INTO automations (user_id, name, prompt, cron, enabled, run_mode, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [Number(userId), name, prompt, expr, data.enabled === false ? 0 : 1, data.run_mode || 'local', now, now]
+    `INSERT INTO automations (user_id, name, prompt, cron, enabled, run_mode, kind, payload, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      Number(userId), name, prompt, expr, data.enabled === false ? 0 : 1,
+      data.run_mode || 'local', kind, payload, now, now,
+    ]
   );
   const row = get(userId, lastId());
   register(row);
@@ -135,14 +163,18 @@ function update(userId, id, patch = {}) {
   if (!cur) return null;
   if (patch.cron && !cron.validate(String(patch.cron))) throw new Error('cron 表达式无效');
   const next = { ...cur, ...patch };
+  const kind = next.kind === 'news_digest' ? 'news_digest' : 'agent';
+  const payload = JSON.stringify(next.payload && typeof next.payload === 'object' ? next.payload : {});
   db.rawDb().run(
-    `UPDATE automations SET name=?, prompt=?, cron=?, enabled=?, run_mode=?, updated_at=? WHERE id=? AND user_id=?`,
+    `UPDATE automations SET name=?, prompt=?, cron=?, enabled=?, run_mode=?, kind=?, payload=?, updated_at=? WHERE id=? AND user_id=?`,
     [
       String(next.name).slice(0, 80),
       String(next.prompt).slice(0, 4000),
       String(next.cron),
       next.enabled ? 1 : 0,
       next.run_mode || 'local',
+      kind,
+      payload,
       db.nowIso(), Number(id), Number(userId),
     ]
   );
@@ -183,13 +215,22 @@ async function execute(userId, automation) {
   );
   const runId = lastId();
   try {
-    const nlp = require('./nlp');
-    const r = await nlp.chat(userId, automation.prompt, {
-      approvalMode: 'auto',
-      deepThink: false,
-      onDelta: () => {},
-    });
-    const result = r && r.reply ? String(r.reply).slice(0, 8000) : '';
+    let result = '';
+    if (automation.kind === 'news_digest') {
+      const news = require('./news');
+      const digest = await news.digest(userId, {
+        boardId: automation.payload && automation.payload.boardId,
+      });
+      result = String(digest.text || '').slice(0, 8000);
+    } else {
+      const nlp = require('./nlp');
+      const r = await nlp.chat(userId, automation.prompt, {
+        approvalMode: 'auto',
+        deepThink: false,
+        onDelta: () => {},
+      });
+      result = r && r.reply ? String(r.reply).slice(0, 8000) : '';
+    }
     db.rawDb().run(
       'UPDATE automation_runs SET status=?, result=?, finished_at=? WHERE id=?',
       ['success', result, db.nowIso(), runId]
@@ -200,7 +241,10 @@ async function execute(userId, automation) {
     );
     db.persist();
     logger.info(`automation #${aid} completed`);
-    notifyDone('Scheduled task 完成', `${automation.name}\n${result.slice(0, 180)}`);
+    notifyDone(
+      automation.kind === 'news_digest' ? '新闻推送' : 'Scheduled task 完成',
+      `${automation.name}\n${result.slice(0, 180)}`
+    );
     return { ok: true, result };
   } catch (e) {
     const result = String(e.message || e).slice(0, 4000);

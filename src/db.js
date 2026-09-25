@@ -28,8 +28,16 @@ async function init() {
   // sql.js 的 wasm 文件：开发模式从 node_modules 复制；pkg 模式下从虚拟 fs 提取
   const wasmDst = path.join(config.dataDir, 'sql-wasm.wasm');
   if (process.pkg) {
-    // pkg 模式：从虚拟文件系统读取
-    const wasmBuf = fs.readFileSync(path.join(path.dirname(process.execPath), 'sql-wasm.wasm'));
+    // pkg does not preserve compressed binary assets byte-for-byte, so the
+    // portable package ships this file next to the executable.
+    const wasmPath = path.join(path.dirname(process.execPath), 'sql-wasm.wasm');
+    if (!fs.existsSync(wasmPath)) {
+      throw new Error(`sql-wasm.wasm not found next to executable: ${wasmPath}`);
+    }
+    const wasmBuf = fs.readFileSync(wasmPath);
+    if (wasmBuf.length < 1024 || wasmBuf[0] !== 0 || wasmBuf[1] !== 97 || wasmBuf[2] !== 115 || wasmBuf[3] !== 109) {
+      throw new Error(`invalid sql-wasm.wasm next to executable: ${wasmPath}`);
+    }
     fs.writeFileSync(wasmDst, wasmBuf);
     logger.info('pkg mode: extracted sql-wasm.wasm to data dir');
   } else {

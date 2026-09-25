@@ -84,6 +84,8 @@ async function main() {
   app.use('/api/todos', require('./src/routes/todos'));
   app.use('/api/schedule', require('./src/routes/schedule'));
   app.use('/api/reminders', require('./src/routes/reminders'));
+  app.use('/api/plan', require('./src/routes/plan'));
+  app.use('/api/news', require('./src/routes/news'));
   app.use('/api/ai', require('./src/routes/ai'));
   app.use('/api/integrations', require('./src/routes/integrations'));
   app.use('/api/ppt', require('./src/routes/ppt'));
@@ -113,6 +115,16 @@ async function main() {
 
   scheduler.loadAll();
   require('./src/services/automations').loadAll();
+  const plan = require('./src/services/plan');
+  plan.rolloverAll();
+  cron.schedule('0 0 * * *', () => {
+    try {
+      const result = plan.rolloverAll();
+      logger.info(`plan rollover completed: ${JSON.stringify(result)}`);
+    } catch (e) {
+      logger.warn('plan rollover failed:', e.message);
+    }
+  });
   // 重复任务：每小时检查一次（完成的重复待办自动生成新实例）
   cron.schedule('0 * * * *', () => scheduler.checkRecurring());
 

@@ -658,6 +658,261 @@ const TOOLS = {
       return { summary, steps: [{ icon: '🔍', text: `已联网搜索：${query}` }] };
     },
   },
+  news_digest: {
+    description: '读取新闻板块并生成新闻简报',
+    async handler({ intent, userId }) {
+      const news = require('./news');
+      const board = intent.board || intent.name || intent.template || intent.title || '';
+      const result = await news.digest(userId, { board, limit: intent.limit });
+      return {
+        data: result.items,
+        summary: result.text,
+        steps: [{ icon: '📰', text: `已生成「${result.board.name}」新闻简报` }],
+      };
+    },
+  },
+  news_search: {
+    description: '按关键词搜索已配置新闻源',
+    async handler({ intent, userId, message }) {
+      const news = require('./news');
+      const query = String(
+        intent.query
+        || intent.keywords
+        || message.replace(/^(搜|搜索|查|查找|看看|新闻|新闻搜索)\s*[:：]?\s*/, '')
+      ).trim();
+      const result = await news.search(userId, query, { limit: intent.limit });
+      return {
+        data: result.items,
+        summary: result.text,
+        steps: [{ icon: '🔎', text: `已搜索新闻：${query}` }],
+      };
+    },
+  },
+  news_list_boards: {
+    description: '列出新闻板块和定时推送状态',
+    async handler({ userId }) {
+      const news = require('./news');
+      const boards = news.listBoards(userId);
+      return {
+        data: boards,
+        summary: boards.length
+          ? boards.map((board) => `• ${board.name}（${board.source_ids.length} 个源，${board.automation_id ? '已定时' : '手动刷新'}）`).join('\n')
+          : '还没有新闻板块',
+        steps: [{ icon: '📰', text: `查询到 ${boards.length} 个新闻板块` }],
+      };
+    },
+  },
+  news_create_board: {
+    description: '创建新闻板块，可同时设置定时推送',
+    async handler({ intent, userId, message }) {
+      const news = require('./news');
+      const catalog = news.publicCatalog();
+      const requested = String(intent.template || intent.board || intent.name || intent.title || '').trim();
+      const template = catalog.templates.find((item) => item.id === requested || item.name === requested)
+        || catalog.templates.find((item) => requested && item.name.includes(requested))
+        || catalog.templates.find((item) => item.id === 'tech-cn')
+        || catalog.templates[0];
+      const name = String(intent.name || intent.title || requested || template.name).slice(0, 60);
+      const cron = String(intent.cron || '').trim() || inferCronFromMessage(message);
+      const board = news.createBoard(userId, {
+        name,
+        templateId: template.id,
+        includeKeywords: intent.keywords || intent.include || '',
+        excludeKeywords: intent.exclude || '',
+        limit: intent.limit,
+        cron,
+      });
+      const scheduleText = cron ? `，并设置定时：${cron}` : '';
+      return {
+        data: board,
+        summary: `📰 已创建新闻板块「${board.name}」${scheduleText}`,
+        steps: [{ icon: '📰', text: `已创建新闻板块：${board.name}` }],
+      };
+    },
+  },
+  news_schedule_board: {
+    description: '为已有新闻板块设置或取消定时推送',
+    async handler({ intent, userId, message }) {
+      const news = require('./news');
+      const boardName = String(intent.board || intent.name || intent.title || '').trim();
+      const board = news.listBoards(userId).find((item) => {
+        if (!boardName) return false;
+        return item.name === boardName || item.name.includes(boardName) || String(item.id) === boardName;
+      });
+      if (!board) return { summary: `找不到新闻板块「${boardName}」，可先说"列出新闻板块"` };
+      const cron = String(intent.cron || '').trim() || inferCronFromMessage(message);
+      if (!cron) return { summary: '⚠️ 没听出推送时间，试试：每天 8:00 / 工作日 8:30' };
+      news.scheduleBoard(userId, board.id, cron);
+      return {
+        data: { boardId: board.id, cron },
+        summary: `⏰ 已为「${board.name}」设置新闻推送：${cron}`,
+        steps: [{ icon: '⏰', text: `已设置新闻推送：${board.name}` }],
+      };
+    },
+  },
+  plan_dashboard: {
+    description: '查看月目标、周任务、每日待办和完成率',
+    async handler({ intent, userId }) {
+      const plan = require('./plan');
+      const data = plan.dashboard(userId, intent.month);
+      const metrics = data.metrics;
+      return {
+        data,
+        summary: [
+          `## ${data.month} 计划进度`,
+          `- 月目标：${metrics.completedGoals}/${metrics.goalCount}，完成率 ${metrics.monthProgress}%`,
+          `- 周任务：${metrics.completedTasks}/${metrics.taskCount}，完成率 ${metrics.taskProgress}%`,
+          `- 今日待办：${metrics.doneToday}/${metrics.todayCount}，完成率 ${metrics.todayProgress}%`,
+          `- 逾期：${metrics.overdueCount} 项；顺延：${metrics.rolledCount} 项`,
+        ].join('\n'),
+        steps: [{ icon: '📅', text: `读取 ${data.month} 计划工作台` }],
+      };
+    },
+  },
+  plan_create_goal: {
+    description: '创建月目标',
+    async handler({ intent, userId, message }) {
+      const plan = require('./plan');
+      const title = String(intent.title || intent.goal || message).trim();
+      const goal = plan.createGoal(userId, {
+        title,
+        description: intent.description || '',
+        month: intent.month,
+        weight: intent.weight,
+      });
+      return {
+        data: goal,
+        summary: `🎯 已创建 ${goal.month} 月目标「${goal.title}」`,
+        steps: [{ icon: '🎯', text: `创建月目标：${goal.title}` }],
+      };
+    },
+  },
+  plan_create_task: {
+    description: '创建周任务并挂到月目标',
+    async handler({ intent, userId, message }) {
+      const plan = require('./plan');
+      const title = String(intent.title || intent.task || message).trim();
+      const goalName = String(intent.goal || intent.goalTitle || '').trim();
+      const goal = goalName
+        ? plan.listGoals(userId, intent.month).find((item) => item.title.includes(goalName))
+        : null;
+      const task = plan.createTask(userId, {
+        title,
+        goalId: goal ? goal.id : intent.goalId,
+        weekStart: intent.weekStart || intent.week,
+        dueDate: intent.dueDate,
+        estimateMinutes: intent.estimateMinutes,
+      });
+      return {
+        data: task,
+        summary: `📌 已创建周任务「${task.title}」${goal ? `，归属「${goal.title}」` : ''}`,
+        steps: [{ icon: '📌', text: `创建周任务：${task.title}` }],
+      };
+    },
+  },
+  plan_create_todo: {
+    description: '创建计划内每日待办并挂到周任务',
+    async handler({ intent, userId, message }) {
+      const plan = require('./plan');
+      const title = String(intent.title || intent.todo || message).trim();
+      const taskName = String(intent.task || intent.taskTitle || '').trim();
+      const task = taskName
+        ? plan.listTasks(userId).find((item) => item.title.includes(taskName))
+        : null;
+      const row = plan.createDailyTodo(userId, {
+        title,
+        taskId: task ? task.id : intent.taskId,
+        plannedFor: intent.plannedFor || intent.date,
+        dueAt: intent.dueAt,
+        priority: intent.priority,
+      });
+      return {
+        data: row,
+        summary: `✅ 已创建每日待办「${row.title}」${task ? `，归属「${task.title}」` : ''}`,
+        steps: [{ icon: '✅', text: `创建每日待办：${row.title}` }],
+      };
+    },
+  },
+  plan_breakdown: {
+    description: '把一个目标拆解为月目标、周任务和每日待办',
+    async handler({ intent, userId, message }) {
+      const plan = require('./plan');
+      const goalTitle = String(intent.goal || intent.title || message)
+        .replace(/^(帮我|请|把|将)?\s*(目标)?\s*/, '')
+        .trim();
+      if (!goalTitle) return { summary: '⚠️ 请告诉我要拆解的目标' };
+      const month = plan.monthKey();
+      const weeks = plan.weeksOfMonth(month).map((week) => `${week.start} 至 ${week.end}`);
+      const prompt = `当前日期：${plan.dateKey()}。
+目标：${goalTitle}
+本月：${month}
+可用周：${weeks.join('；')}
+请把这个目标拆解为可执行计划，只输出 JSON：
+{"goal":{"title":"月目标","description":"完成定义"},"tasks":[{"title":"周任务","weekStart":"YYYY-MM-DD","dueDate":"YYYY-MM-DD","todos":[{"title":"每日待办","plannedFor":"YYYY-MM-DD","priority":1}]}]}
+要求：3-6 个周任务；每个周任务 1-3 个每日待办；日期必须落在对应周内；不要解释。`;
+      const response = await llm.chat(
+        [
+          { role: 'system', content: '你是计划拆解器，只输出合法 JSON，不要 Markdown 包裹。' },
+          { role: 'user', content: prompt },
+        ],
+        { temperature: 0.2, max_tokens: 1800, userId, intent: 'plan_breakdown' }
+      );
+      if (!response.ok) return { summary: '⚠️ 目标拆解失败：' + response.error };
+      const parsed = safeParseJson(response.text);
+      if (!parsed || !parsed.goal || !Array.isArray(parsed.tasks)) {
+        return { summary: '⚠️ 拆解结果格式异常，请重试' };
+      }
+      const goal = plan.createGoal(userId, {
+        title: parsed.goal.title || goalTitle,
+        description: parsed.goal.description || '',
+        month,
+      });
+      let taskCount = 0;
+      let todoCount = 0;
+      for (const taskData of parsed.tasks.slice(0, 8)) {
+        if (!taskData || !taskData.title) continue;
+        const task = plan.createTask(userId, {
+          title: taskData.title,
+          goalId: goal.id,
+          weekStart: taskData.weekStart,
+          dueDate: taskData.dueDate,
+          description: taskData.description || '',
+        });
+        taskCount++;
+        for (const todoData of (taskData.todos || []).slice(0, 4)) {
+          if (!todoData || !todoData.title) continue;
+          plan.createDailyTodo(userId, {
+            title: todoData.title,
+            taskId: task.id,
+            plannedFor: todoData.plannedFor || task.week_start,
+            priority: todoData.priority,
+          });
+          todoCount++;
+        }
+      }
+      return {
+        data: { goal, taskCount, todoCount },
+        summary: `🧭 已拆解月目标「${goal.title}」：${taskCount} 个周任务，${todoCount} 个每日待办`,
+        steps: [
+          { icon: '🎯', text: `创建月目标：${goal.title}` },
+          { icon: '📌', text: `创建 ${taskCount} 个周任务` },
+          { icon: '✅', text: `创建 ${todoCount} 个每日待办` },
+        ],
+      };
+    },
+  },
+  plan_rollover: {
+    description: '立即顺延逾期月目标、周任务和每日待办',
+    async handler({ userId }) {
+      const plan = require('./plan');
+      const result = plan.rolloverOverdue(userId);
+      return {
+        data: result,
+        summary: `🔄 已顺延 ${result.total} 项：月目标 ${result.goals}，周任务 ${result.tasks}，每日待办 ${result.todos}`,
+        steps: [{ icon: '🔄', text: '完成逾期顺延' }],
+      };
+    },
+  },
 
   // ===== PPT 助理（ppt-master 方法论：大纲⛔ → 设计⛔ → 生成）=====
   ask_clarification: {
@@ -1568,7 +1823,20 @@ B. 用户要执行操作（可多个）：
    - "回忆/我记得什么" → memory_recall
    - 系统已注入 [长期记忆]，普通对话无需额外调用 memory_recall，直接用记忆回答
 10. 技能类请求：用户请求匹配某个技能的描述/适用场景 → use_skill，args: {"skill":"技能名","task":"具体任务"}
-11. 只输出 JSON`;
+11. 新闻类请求：
+   - "看新闻/今日要闻/科技新闻/生成新闻简报" → news_digest，args 可带 {"board":"板块名","limit":10}
+   - "搜索新闻/查某主题新闻" → news_search，args: {"query":"关键词"}
+   - "有哪些新闻板块" → news_list_boards
+   - "创建新闻板块/每天8点推送科技新闻" → news_create_board，args: {"name":"板块名","template":"模板名","cron":"0 8 * * *","keywords":"关键词"}
+   - 给已有板块设置定时 → news_schedule_board
+12. 计划工作台请求：
+   - "看进度/完成率/本月计划" → plan_dashboard
+   - "创建月目标" → plan_create_goal
+   - "创建周任务" → plan_create_task
+   - "创建今天待办/计划内待办" → plan_create_todo
+   - "把这个目标拆成周任务和每日待办" → plan_breakdown，args: {"goal":"目标"}
+   - "顺延逾期/处理逾期" → plan_rollover
+13. 只输出 JSON`;
 
 /**
  * 解析 LLM 的 agent 计划 JSON
@@ -1607,7 +1875,9 @@ const CODEX_AGENT_SYSTEM = `你是 WorkBuddy 的自动执行 Agent（仿 Codex�
 3. 相同工具+相同参数连续出现 = 死循环，必须改参数或直接 final
 4. 删除/格式化/改注册表等危险操作：先 ask_clarification，或由沙箱策略拒绝
 5. 任务完成后输出 final；reply 可以是完整答案，也可以是对已执行结果的总结
-6. 最多自动执行 {MAX} 轮`;
+6. 新闻请求优先调用 news_* 工具；需要定时推送时先创建/更新新闻板块，再复用 automation
+7. 计划类请求优先调用 plan_* 工具；复杂目标先拆解，不要只给文字建议
+8. 最多自动执行 {MAX} 轮`;
 
 // ===== 审批策略（请求批准 / 帮我批准 / 完全访问）=====
 const SENSITIVE_TOOLS = new Set([

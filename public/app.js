@@ -69,14 +69,12 @@ function showLogin() {
   $('#loginForm').querySelector('h2').textContent = '🧭 WorkBuddy';
   $('#loginForm').querySelector('p.muted').textContent = '请登录以使用你的本地助手';
   $('#loginForm').querySelector('button[type=submit]').textContent = '登录';
-  $('#userInfo').textContent = '';
   document.querySelector('main').style.display = 'none';
 }
 function hideLogin() {
   $('#loginOverlay').classList.add('hidden');
   document.querySelector('main').style.display = '';
   const u = getUser();
-  if (u) $('#userInfo').textContent = u.username;
   loadSessionList();
 }
 
@@ -101,6 +99,7 @@ $('#loginForm').addEventListener('submit', async (e) => {
     setToken(data.token);
     setUser(data.user);
     hideLogin();
+    loadHome();
     loadTodos();
     refreshAiStatus();
     refreshBackupStats();
@@ -122,12 +121,89 @@ $$('.tab').forEach((btn) => {
     $$('.panel').forEach((p) => p.classList.remove('active'));
     btn.classList.add('active');
     $('#panel-' + btn.dataset.tab).classList.add('active');
-    if (btn.dataset.tab === 'todos') loadTodos();
+    if (btn.dataset.tab !== 'plan') $('#planViewTabs').classList.add('hidden');
+    if (btn.dataset.tab === 'chat' && window.matchMedia('(min-width: 1200px)').matches) {
+      $$('.panel').forEach((panel) => panel.classList.remove('active'));
+      $('#panel-home').classList.add('active');
+      setTimeout(() => $('#chatInput').focus(), 40);
+    }
+    if (btn.dataset.tab === 'home') loadHome();
     if (btn.dataset.tab === 'schedule') loadEvents();
+    if (btn.dataset.tab === 'plan') showPlanView(activePlanView);
+    if (btn.dataset.tab === 'news') loadNews();
     if (btn.dataset.tab === 'reminders') loadReminders();
     if (btn.dataset.tab === 'ai') refreshAiStatus();
   });
 });
+
+// ===== 首页总览 =====
+async function loadHome() {
+  const now = new Date();
+  $('#homeGreeting').textContent = `${now.getHours() < 12 ? '早上好' : now.getHours() < 18 ? '下午好' : '晚上好'}，今天继续推进`;
+  $('#homeDate').textContent = now.toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'long',
+  });
+  const [planResult, todoResult, scheduleResult, newsResult] = await Promise.allSettled([
+    api('/api/plan/dashboard?month=' + encodeURIComponent(currentMonthValue())),
+    api('/api/todos/dashboard'),
+    api('/api/schedule'),
+    api('/api/news/boards'),
+  ]);
+  const plan = planResult.status === 'fulfilled' ? planResult.value : null;
+  const todo = todoResult.status === 'fulfilled' ? todoResult.value : null;
+  const schedule = scheduleResult.status === 'fulfilled' ? scheduleResult.value : [];
+  const boards = newsResult.status === 'fulfilled' ? (newsResult.value.items || []) : [];
+  const metrics = plan?.metrics || {};
+
+  $('#homeMetrics').innerHTML = [
+    planMetricCard('今日待办', `${metrics.doneToday || 0}/${metrics.todayCount || 0}`, '已完成 / 今日计划'),
+    planMetricCard('本月完成率', `${metrics.monthProgress || 0}%`, `${metrics.completedGoals || 0}/${metrics.goalCount || 0} 个目标`, 'gauge'),
+    planMetricCard('逾期任务', String(todo?.overdue || metrics.overdueCount || 0), '需要优先处理'),
+    planMetricCard('计划任务', String(metrics.taskCount || 0), `${metrics.completedTasks || 0} 个已完成`),
+  ].join('');
+
+  const todayTodos = plan?.todayTodos || [];
+  $('#homeTodoCount').textContent = `${todayTodos.filter((item) => item.status === 'done').length}/${todayTodos.length}`;
+  $('#homeTodoList').innerHTML = todayTodos.length
+    ? todayTodos.slice(0, 6).map((item) => `
+        <label class="home-row">
+          <span class="home-dot ${item.status === 'done' ? 'is-done' : ''}"></span>
+          <span>${escapeHtml(item.title)}</span>
+          <em>${item.priority === 1 ? '高' : item.priority === 3 ? '低' : '中'}</em>
+        </label>`).join('')
+    : '<div class="home-empty">今天暂时没有待办</div>';
+
+  const goals = plan?.goals || [];
+  $('#homePlanProgress').textContent = `${metrics.monthProgress || 0}%`;
+  $('#homePlanList').innerHTML = goals.length
+    ? goals.slice(0, 4).map((goal) => `
+        <div class="home-row home-row--stack">
+          <div><span>${escapeHtml(goal.title)}</span><em>${goal.progress}%</em></div>
+          ${planProgressBar(goal.progress)}
+        </div>`).join('')
+    : '<div class="home-empty">还没有月目标</div>';
+
+  $('#homeNewsCount').textContent = String(boards.length);
+  $('#homeNewsList').innerHTML = boards.length
+    ? boards.slice(0, 4).map((board) => `
+        <div class="home-row"><span class="home-dot"></span><span>${escapeHtml(board.name)}</span><em>${board.cron ? '定时' : '手动'}</em></div>`).join('')
+    : '<div class="home-empty">还没有新闻板块</div>';
+
+  const upcoming = (schedule || [])
+    .filter((event) => new Date(event.start_at) >= now)
+    .sort((a, b) => new Date(a.start_at) - new Date(b.start_at));
+  $('#homeScheduleCount').textContent = String(upcoming.length);
+  $('#homeScheduleList').innerHTML = upcoming.length
+    ? upcoming.slice(0, 5).map((event) => `
+        <div class="home-row home-row--stack">
+          <div><span>${escapeHtml(event.title)}</span><em>${new Date(event.start_at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}</em></div>
+          <small>${escapeHtml(event.location || new Date(event.start_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }))}</small>
+        </div>`).join('')
+    : '<div class="home-empty">接下来没有日程</div>';
+}
 
 // ===== 待办 P1 增强（多选/批量/分类标签/空状态/密度）=====
 let todoFilter = 'all';
@@ -463,8 +539,6 @@ $('#quickTodoForm')?.addEventListener('submit', async (e) => {
   }
 });
 function focusQuickTodoOnTab() { setTimeout(() => { const inp = $('#quickTodoInput'); if (inp) inp.focus(); }, 50); }
-$$('.tab').forEach((b) => b.addEventListener('click', () => { if (b.dataset.tab === 'todos') focusQuickTodoOnTab(); }));
-focusQuickTodoOnTab();
 
 // 高级待办表单提交（含 Markdown 描述）
 $('#todoForm').addEventListener('submit', async (e) => {
@@ -735,6 +809,605 @@ $$('.rem-view-tab').forEach((btn) => {
   btn.addEventListener('click', () => switchReminderView(btn.dataset.remView));
 });
 
+// ===== 计划工作台：月目标 / 周任务 / 每日待办 =====
+const planState = {
+  month: '',
+  data: null,
+};
+let activePlanView = 'board';
+
+function showPlanView(view, options = {}) {
+  activePlanView = view === 'todos' ? 'todos' : 'board';
+  $('#planViewTabs').classList.remove('hidden');
+  $$('.tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.tab === 'plan'));
+  $$('.panel').forEach((panel) => panel.classList.remove('active'));
+  $('#panel-' + (activePlanView === 'todos' ? 'todos' : 'plan')).classList.add('active');
+  $$('.plan-view-tab').forEach((tab) => {
+    const active = tab.dataset.planView === activePlanView;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
+  });
+  if (activePlanView === 'todos') {
+    loadTodos().finally(() => {
+      if (options.focus !== false) focusQuickTodoOnTab();
+    });
+  } else {
+    loadPlan();
+  }
+}
+
+function currentMonthValue() {
+  const now = new Date();
+  return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+}
+
+function currentDateValue() {
+  const now = new Date();
+  return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+}
+
+function planMetricCard(label, value, hint, tone = '') {
+  const numeric = Number(String(value).replace('%', '')) || 0;
+  const gauge = tone === 'gauge';
+  return `
+    <article class="plan-metric ${gauge ? 'plan-metric--gauge' : ''}">
+      ${gauge ? `<div class="plan-gauge" style="--value:${numeric}"><span>${escapeHtml(String(value))}</span></div>` : `<strong>${escapeHtml(String(value))}</strong>`}
+      <div><span>${escapeHtml(label)}</span><small>${escapeHtml(hint)}</small></div>
+    </article>`;
+}
+
+function renderPlanMetrics(data) {
+  const m = data.metrics;
+  $('#planMetrics').innerHTML = [
+    planMetricCard('月目标完成率', m.monthProgress + '%', `${m.completedGoals}/${m.goalCount} 个目标`, 'gauge'),
+    planMetricCard('周任务完成率', m.taskProgress + '%', `${m.completedTasks}/${m.taskCount} 个任务`),
+    planMetricCard('今日完成率', m.todayProgress + '%', `${m.doneToday}/${m.todayCount} 项待办`),
+    planMetricCard('逾期与顺延', m.overdueCount + ' / ' + m.rolledCount, '当前逾期 / 已顺延'),
+  ].join('');
+}
+
+function planProgressBar(value) {
+  return `<div class="plan-progress"><span style="width:${Math.min(Math.max(Number(value) || 0, 0), 100)}%"></span></div>`;
+}
+
+function renderPlanGoals() {
+  const box = $('#planGoalList');
+  const goals = planState.data?.goals || [];
+  if (!goals.length) {
+    box.innerHTML = '<div class="plan-empty">还没有月目标。先定义一个结果，再向下拆解。</div>';
+    return;
+  }
+  box.innerHTML = goals.map((goal) => `
+    <article class="plan-goal ${goal.progress === 100 ? 'is-done' : ''}" data-plan-goal="${goal.id}">
+      <div class="plan-goal-top">
+        <span class="plan-state-dot"></span>
+        <strong>${escapeHtml(goal.title)}</strong>
+        <em>${goal.progress}%</em>
+      </div>
+      ${planProgressBar(goal.progress)}
+      <div class="plan-meta">
+        <span>${goal.doneTasks}/${goal.taskCount} 个周任务</span>
+        ${goal.overdue ? '<span class="plan-warn">已逾期</span>' : ''}
+        ${goal.rolled ? `<span>顺延 ${goal.rollover_count} 次</span>` : ''}
+      </div>
+    </article>`).join('');
+  $$('#planGoalList [data-plan-goal]').forEach((card) => card.addEventListener('click', () => {
+    const goal = goals.find((item) => item.id === Number(card.dataset.planGoal));
+    if (goal) openPlanGoalForm(goal);
+  }));
+}
+
+function renderPlanTaskCard(task) {
+  return `
+    <article class="plan-task ${task.progress === 100 ? 'is-done' : ''}" data-plan-task="${task.id}">
+      <div class="plan-task-title">
+        <span class="plan-state-dot"></span>
+        <strong>${escapeHtml(task.title)}</strong>
+      </div>
+      <div class="plan-task-meta">
+        <span>${escapeHtml(task.goal_title || '未关联目标')}</span>
+        <span>${task.done}/${task.total} 待办</span>
+      </div>
+      ${planProgressBar(task.progress)}
+      <div class="plan-task-foot">
+        <span>${escapeHtml(task.due_date || task.week_start)}</span>
+        ${task.rolled ? `<em>顺延 ${task.rollover_count}</em>` : ''}
+      </div>
+    </article>`;
+}
+
+function renderPlanWeeks() {
+  const box = $('#planWeekBoard');
+  const weeks = planState.data?.weeks || [];
+  $('#planWeekRange').textContent = weeks.length ? `${weeks[0].start} 至 ${weeks[weeks.length - 1].end}` : '';
+  if (!weeks.length) {
+    box.innerHTML = '<div class="plan-empty">当前月份没有可用周。</div>';
+    return;
+  }
+  box.innerHTML = weeks.map((week) => `
+    <section class="plan-week ${week.isCurrent ? 'is-current' : ''}">
+      <div class="plan-week-head">
+        <div><strong>${escapeHtml(week.label)}</strong><span>${week.doneTasks}/${week.taskCount} 任务</span></div>
+        <button class="ghost small" data-plan-add-task="${week.start}" title="添加周任务">+</button>
+      </div>
+      <div class="plan-week-progress">
+        <span>${week.progress}%</span>${planProgressBar(week.progress)}
+      </div>
+      <div class="plan-task-list">
+        ${week.tasks.map(renderPlanTaskCard).join('') || '<div class="plan-empty plan-empty--compact">本周还没有任务</div>'}
+      </div>
+    </section>`).join('');
+  $$('#planWeekBoard [data-plan-add-task]').forEach((btn) => btn.addEventListener('click', () => openPlanTaskForm({ weekStart: btn.dataset.planAddTask })));
+  $$('#planWeekBoard [data-plan-task]').forEach((card) => card.addEventListener('click', () => {
+    const task = planState.data.tasks.find((item) => item.id === Number(card.dataset.planTask));
+    if (task) openPlanTaskForm(task);
+  }));
+}
+
+function renderPlanToday() {
+  const box = $('#planTodayList');
+  const todos = planState.data?.todayTodos || [];
+  $('#planTodayCount').textContent = `${planState.data?.metrics.doneToday || 0}/${planState.data?.metrics.todayCount || 0} 项`;
+  if (!todos.length) {
+    box.innerHTML = '<div class="plan-empty">今天还没有待办，先从一个最小动作开始。</div>';
+  } else {
+    box.innerHTML = todos.map((todo) => `
+      <label class="plan-todo ${todo.status === 'done' ? 'is-done' : ''}">
+        <input type="checkbox" data-plan-todo="${todo.id}" ${todo.status === 'done' ? 'checked' : ''} />
+        <span class="plan-todo-body">
+          <strong>${escapeHtml(todo.title)}</strong>
+          <small>${escapeHtml(todo.category || '计划')}${todo.rollover_count ? ` · 顺延 ${todo.rollover_count} 次` : ''}</small>
+        </span>
+        <em class="plan-priority p${todo.priority || 2}">${todo.priority === 1 ? '高' : todo.priority === 3 ? '低' : '中'}</em>
+      </label>`).join('');
+    $$('#planTodayList [data-plan-todo]').forEach((checkbox) => checkbox.addEventListener('change', async (event) => {
+      event.stopPropagation();
+      await api('/api/todos/' + event.target.dataset.planTodo, {
+        method: 'PATCH',
+        body: { status: event.target.checked ? 'done' : 'open' },
+      });
+      await loadPlan();
+    }));
+  }
+  const m = planState.data?.metrics || {};
+  $('#planInsights').innerHTML = `
+    <div class="plan-insight"><span>本月结构</span><strong>${m.goalCount} 目标 / ${m.taskCount} 周任务</strong></div>
+    <div class="plan-insight"><span>本周节奏</span><strong>${planState.data?.tasks.filter((task) => task.week_start === planState.data?.weeks.find((week) => week.isCurrent)?.start).length || 0} 个任务</strong></div>
+    <div class="plan-insight"><span>自动顺延</span><strong>${m.rolledCount} 项已处理</strong></div>`;
+}
+
+function renderPlanTodoTaskOptions() {
+  const select = $('#planTodoTask');
+  const tasks = (planState.data?.tasks || []).filter((task) => task.progress < 100 && task.status !== 'cancelled');
+  select.innerHTML = '<option value="">不关联周任务</option>' + tasks
+    .map((task) => `<option value="${task.id}">${escapeHtml(task.title)}</option>`)
+    .join('');
+}
+
+function renderPlan() {
+  if (!planState.data) return;
+  renderPlanMetrics(planState.data);
+  renderPlanGoals();
+  renderPlanWeeks();
+  renderPlanToday();
+  renderPlanTodoTaskOptions();
+  $('#planSubtitle').textContent = `${planState.data.month} · 月目标 → 周任务 → 每日待办`;
+}
+
+async function loadPlan() {
+  if (!$('#planMonth').value) $('#planMonth').value = currentMonthValue();
+  const month = $('#planMonth').value || currentMonthValue();
+  planState.month = month;
+  try {
+    planState.data = await api('/api/plan/dashboard?month=' + encodeURIComponent(month));
+    renderPlan();
+  } catch (error) {
+    $('#planMetrics').innerHTML = `<div class="plan-empty">计划加载失败：${escapeHtml(error.message || error)}</div>`;
+  }
+}
+
+function fillPlanGoalOptions(selectedId) {
+  const select = $('#planTaskGoal');
+  const goals = planState.data?.goals || [];
+  select.innerHTML = '<option value="">不关联月目标</option>' + goals
+    .map((goal) => `<option value="${goal.id}" ${Number(selectedId) === goal.id ? 'selected' : ''}>${escapeHtml(goal.title)}</option>`)
+    .join('');
+}
+
+function openPlanGoalForm(goal = null) {
+  $('#planTaskForm').classList.add('hidden');
+  const form = $('#planGoalForm');
+  form.classList.remove('hidden');
+  $('#planGoalId').value = goal ? goal.id : '';
+  $('#planGoalTitle').value = goal ? goal.title : '';
+  $('#planGoalMonth').value = goal ? goal.month : planState.month || currentMonthValue();
+  $('#planGoalDue').value = goal ? (goal.due_date || '') : '';
+  $('#planGoalWeight').value = goal ? goal.weight : 1;
+  $('#planGoalProgress').value = goal ? goal.progress : 0;
+  $('#planGoalDesc').value = goal ? goal.description || '' : '';
+  $('#planGoalDelete').classList.toggle('hidden', !goal);
+  $('#planGoalTitle').focus();
+}
+
+function openPlanTaskForm(options = {}) {
+  $('#planGoalForm').classList.add('hidden');
+  const task = options && options.id ? options : null;
+  const form = $('#planTaskForm');
+  form.classList.remove('hidden');
+  fillPlanGoalOptions(task?.goal_id || options.goalId);
+  $('#planTaskId').value = task ? task.id : '';
+  $('#planTaskTitle').value = task ? task.title : '';
+  $('#planTaskWeek').value = task?.week_start || options.weekStart || planState.data?.weeks.find((week) => week.isCurrent)?.start || planState.data?.weeks[0]?.start || '';
+  $('#planTaskDue').value = task?.due_date || $('#planTaskWeek').value;
+  $('#planTaskEstimate').value = task?.estimate_minutes || 120;
+  $('#planTaskStatus').value = task?.status || 'open';
+  $('#planTaskProgress').value = task?.progress || 0;
+  $('#planTaskDesc').value = task?.description || '';
+  $('#planTaskDelete').classList.toggle('hidden', !task);
+  $('#planTaskTitle').focus();
+}
+
+$('#planMonth').addEventListener('change', loadPlan);
+$$('.plan-view-tab').forEach((tab) => {
+  tab.addEventListener('click', () => showPlanView(tab.dataset.planView));
+});
+$('#btnPlanGoalNew').addEventListener('click', () => openPlanGoalForm());
+$('#btnPlanGoalInline').addEventListener('click', () => openPlanGoalForm());
+$('#planGoalCancel').addEventListener('click', () => $('#planGoalForm').classList.add('hidden'));
+$('#planTaskCancel').addEventListener('click', () => $('#planTaskForm').classList.add('hidden'));
+$('#btnPlanRollover').addEventListener('click', async () => {
+  const result = await api('/api/plan/rollover', { method: 'POST', body: {} });
+  setChatStatus(`已顺延 ${result.total} 项逾期计划`);
+  await loadPlan();
+});
+
+$('#planGoalForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const id = Number($('#planGoalId').value) || null;
+  const body = {
+    title: $('#planGoalTitle').value.trim(),
+    month: $('#planGoalMonth').value,
+    due_date: $('#planGoalDue').value,
+    weight: Number($('#planGoalWeight').value) || 1,
+    progress: Number($('#planGoalProgress').value) || 0,
+    description: $('#planGoalDesc').value.trim(),
+  };
+  try {
+    if (id) await api('/api/plan/goals/' + id, { method: 'PATCH', body });
+    else await api('/api/plan/goals', { method: 'POST', body });
+    $('#planGoalForm').classList.add('hidden');
+    await loadPlan();
+  } catch (error) {
+    alert(error.message || error);
+  }
+});
+
+$('#planGoalDelete').addEventListener('click', async () => {
+  const id = Number($('#planGoalId').value);
+  if (!id || !confirm('删除这个月目标？关联周任务会保留但不再归属该目标。')) return;
+  await api('/api/plan/goals/' + id, { method: 'DELETE' });
+  $('#planGoalForm').classList.add('hidden');
+  await loadPlan();
+});
+
+$('#planTaskForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const id = Number($('#planTaskId').value) || null;
+  const body = {
+    title: $('#planTaskTitle').value.trim(),
+    goal_id: Number($('#planTaskGoal').value) || null,
+    week_start: $('#planTaskWeek').value,
+    due_date: $('#planTaskDue').value,
+    estimate_minutes: Number($('#planTaskEstimate').value) || 0,
+    status: $('#planTaskStatus').value,
+    progress: Number($('#planTaskProgress').value) || 0,
+    description: $('#planTaskDesc').value.trim(),
+  };
+  try {
+    if (id) await api('/api/plan/tasks/' + id, { method: 'PATCH', body });
+    else await api('/api/plan/tasks', { method: 'POST', body });
+    $('#planTaskForm').classList.add('hidden');
+    await loadPlan();
+  } catch (error) {
+    alert(error.message || error);
+  }
+});
+
+$('#planTaskDelete').addEventListener('click', async () => {
+  const id = Number($('#planTaskId').value);
+  if (!id || !confirm('删除这个周任务？关联每日待办会保留但解除关联。')) return;
+  await api('/api/plan/tasks/' + id, { method: 'DELETE' });
+  $('#planTaskForm').classList.add('hidden');
+  await loadPlan();
+});
+
+$('#planTodoForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const title = $('#planTodoTitle').value.trim();
+  if (!title) return;
+  try {
+    await api('/api/plan/todos', {
+      method: 'POST',
+      body: {
+        title,
+        taskId: Number($('#planTodoTask').value) || null,
+        plannedFor: currentDateValue(),
+        priority: Number($('#planTodoPriority').value) || 2,
+      },
+    });
+    event.target.reset();
+    await loadPlan();
+  } catch (error) {
+    alert(error.message || error);
+  }
+});
+
+// ===== 新闻 =====
+const NEWS_CATEGORY_LABELS = {
+  general: '综合',
+  world: '国际',
+  finance: '财经',
+  tech: '科技',
+  ai: 'AI',
+  developer: '开发',
+  science: '科学',
+  culture: '文化',
+  'digital-life': '数字生活',
+  'business-tech': '商业科技',
+};
+
+let newsCatalog = null;
+let newsBoards = [];
+let newsActiveBoardId = null;
+let newsItems = [];
+let newsLoading = false;
+
+function activeNewsBoard() {
+  return newsBoards.find((board) => board.id === Number(newsActiveBoardId)) || newsBoards[0] || null;
+}
+
+function renderNewsBoards() {
+  const box = $('#newsBoardTabs');
+  if (!box) return;
+  box.innerHTML = '';
+  for (const board of newsBoards) {
+    const btn = document.createElement('button');
+    btn.className = 'news-board-tab' + (board.id === Number(newsActiveBoardId) ? ' active' : '');
+    btn.type = 'button';
+    btn.innerHTML = `<span>${escapeHtml(board.name)}</span>${board.cron ? '<small>定时</small>' : ''}`;
+    btn.addEventListener('click', async () => {
+      newsActiveBoardId = board.id;
+      newsItems = [];
+      renderNewsBoards();
+      await refreshNewsBoard(false);
+    });
+    box.appendChild(btn);
+  }
+}
+
+function renderNewsSources(selectedIds = []) {
+  const box = $('#newsSources');
+  if (!box || !newsCatalog) return;
+  const selected = new Set(selectedIds);
+  const groups = new Map();
+  for (const source of newsCatalog.sources) {
+    const key = source.category || 'other';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(source);
+  }
+  box.innerHTML = '';
+  for (const [category, sources] of groups) {
+    const group = document.createElement('div');
+    group.className = 'news-source-group';
+    group.innerHTML = `<div class="news-source-group-title">${escapeHtml(NEWS_CATEGORY_LABELS[category] || category)}</div>`;
+    for (const source of sources) {
+      const label = document.createElement('label');
+      label.className = 'news-source-option';
+      label.innerHTML = `
+        <input type="checkbox" value="${escapeHtml(source.id)}" ${selected.has(source.id) ? 'checked' : ''} />
+        <span>${escapeHtml(source.name)}</span>
+        <em>${escapeHtml(source.language || '')}</em>`;
+      group.appendChild(label);
+    }
+    box.appendChild(group);
+  }
+}
+
+function renderNewsForm(board = null) {
+  const form = $('#newsBoardForm');
+  if (!form) return;
+  $('#newsBoardId').value = board ? board.id : '';
+  $('#newsBoardName').value = board ? board.name : '';
+  $('#newsLimit').value = board ? board.limit_count : 12;
+  $('#newsInclude').value = board ? board.include_keywords.join(', ') : '';
+  $('#newsExclude').value = board ? board.exclude_keywords.join(', ') : '';
+  const cron = board?.cron || '';
+  const schedule = $('#newsSchedule');
+  const standard = Array.from(schedule.options).some((option) => option.value === cron);
+  schedule.value = standard ? cron : (cron ? 'custom' : '');
+  $('#newsCron').value = cron && !standard ? cron : '';
+  $('#newsCronWrap').classList.toggle('hidden', schedule.value !== 'custom');
+  $('#btnNewsDelete').classList.toggle('hidden', !board);
+  renderNewsSources(board?.source_ids || []);
+  form.classList.remove('hidden');
+}
+
+function renderNewsFeed(result = null) {
+  const box = $('#newsFeed');
+  const note = $('#newsBoardNote');
+  if (!box) return;
+  const board = activeNewsBoard();
+  if (note) {
+    if (!board) {
+      note.textContent = '';
+    } else {
+      const parts = [
+        `${board.source_ids.length} 个信息源`,
+        `${board.limit_count} 条上限`,
+        board.cron ? `推送 ${board.cron}` : '仅手动刷新',
+      ];
+      if (result?.errors?.length) parts.push(`${result.errors.length} 个源暂不可用`);
+      note.textContent = parts.join(' · ');
+    }
+  }
+  if (!board) {
+    box.innerHTML = '<div class="news-empty"><strong>还没有新闻板块</strong><span>点击“新建板块”开始配置。</span></div>';
+    return;
+  }
+  if (newsLoading) {
+    box.innerHTML = '<div class="news-empty"><strong>正在抓取新闻</strong><span>信息源会并行加载，稍等一下。</span></div>';
+    return;
+  }
+  if (!newsItems.length) {
+    box.innerHTML = '<div class="news-empty"><strong>暂时没有内容</strong><span>可以放宽关键词，或点击刷新重试。</span></div>';
+    return;
+  }
+  box.innerHTML = newsItems.map((item) => {
+    const meta = [item.sourceName, item.publishedAt ? fmtDateTime(item.publishedAt) : '时间未知'].filter(Boolean).join(' · ');
+    return `
+      <article class="news-item">
+        <div class="news-item-meta">${escapeHtml(meta)}</div>
+        <h3><a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title)}</a></h3>
+        ${item.summary ? `<p>${escapeHtml(item.summary)}</p>` : ''}
+      </article>`;
+  }).join('');
+}
+
+async function refreshNewsBoard(force = false) {
+  const board = activeNewsBoard();
+  if (!board || newsLoading) return;
+  newsLoading = true;
+  renderNewsFeed();
+  const status = $('#newsStatus');
+  if (status) status.textContent = '正在刷新…';
+  try {
+    const result = await api('/api/news/boards/' + board.id + '/run', {
+      method: 'POST',
+      body: { force },
+    });
+    newsItems = result.items || [];
+    newsLoading = false;
+    if (status) status.textContent = `已更新 ${newsItems.length} 条 · ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`;
+    renderNewsFeed(result);
+  } catch (error) {
+    newsLoading = false;
+    newsItems = [];
+    if (status) status.textContent = '刷新失败';
+    $('#newsFeed').innerHTML = `<div class="news-empty"><strong>新闻加载失败</strong><span>${escapeHtml(error.message || error)}</span></div>`;
+  } finally { newsLoading = false; }
+}
+
+async function loadNews(options = {}) {
+  const status = $('#newsStatus');
+  if (status) status.textContent = '加载信息源…';
+  try {
+    const [catalog, boardsResponse] = await Promise.all([
+      api('/api/news/catalog'),
+      api('/api/news/boards'),
+    ]);
+    newsCatalog = catalog;
+    newsBoards = boardsResponse.items || [];
+    const preferred = options.boardName
+      ? newsBoards.find((board) => board.name.includes(options.boardName))
+      : null;
+    if (!newsActiveBoardId || !newsBoards.some((board) => board.id === Number(newsActiveBoardId))) {
+      newsActiveBoardId = (preferred || newsBoards[0])?.id || null;
+    } else if (preferred) {
+      newsActiveBoardId = preferred.id;
+    }
+    const templateSelect = $('#newsTemplate');
+    if (templateSelect) {
+      templateSelect.innerHTML = '<option value="">自定义</option>' + (catalog.templates || [])
+        .map((template) => `<option value="${escapeHtml(template.id)}">${escapeHtml(template.name)}</option>`)
+        .join('');
+    }
+    renderNewsBoards();
+    if (status) status.textContent = newsBoards.length ? '选择板块后自动刷新' : '还没有新闻板块';
+    if (newsActiveBoardId) await refreshNewsBoard(!!options.force);
+    else renderNewsFeed();
+  } catch (error) {
+    if (status) status.textContent = '加载失败';
+    $('#newsFeed').innerHTML = `<div class="news-empty"><strong>新闻模块加载失败</strong><span>${escapeHtml(error.message || error)}</span></div>`;
+  }
+}
+
+function selectedNewsSourceIds() {
+  return $$('#newsSources input[type="checkbox"]:checked').map((input) => input.value);
+}
+
+$('#newsTemplate').addEventListener('change', (event) => {
+  const template = newsCatalog?.templates.find((item) => item.id === event.target.value);
+  if (!template) return;
+  if (!$('#newsBoardName').value.trim()) $('#newsBoardName').value = template.name;
+  $('#newsLimit').value = template.limit || 12;
+  renderNewsSources(template.sourceIds || []);
+});
+
+$('#newsSchedule').addEventListener('change', (event) => {
+  $('#newsCronWrap').classList.toggle('hidden', event.target.value !== 'custom');
+});
+
+$('#btnNewsNew').addEventListener('click', () => {
+  renderNewsForm(null);
+  $('#newsBoardName').focus();
+});
+$('#btnNewsConfigure').addEventListener('click', () => {
+  const board = activeNewsBoard();
+  if (board) renderNewsForm(board);
+});
+$('#newsFormCancel').addEventListener('click', () => $('#newsBoardForm').classList.add('hidden'));
+
+$('#newsBoardForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const id = Number($('#newsBoardId').value) || null;
+  const scheduleValue = $('#newsSchedule').value;
+  const cron = scheduleValue === 'custom' ? $('#newsCron').value.trim() : scheduleValue;
+  const body = {
+    name: $('#newsBoardName').value.trim(),
+    sourceIds: selectedNewsSourceIds(),
+    includeKeywords: $('#newsInclude').value,
+    excludeKeywords: $('#newsExclude').value,
+    limit: Number($('#newsLimit').value) || 12,
+    cron,
+  };
+  try {
+    const saved = id
+      ? await api('/api/news/boards/' + id, { method: 'PATCH', body })
+      : await api('/api/news/boards', { method: 'POST', body });
+    newsActiveBoardId = saved.id;
+    $('#newsBoardForm').classList.add('hidden');
+    await loadNews({ force: true });
+  } catch (error) {
+    alert(error.message || error);
+  }
+});
+
+$('#btnNewsDelete').addEventListener('click', async () => {
+  const board = activeNewsBoard();
+  if (!board || !confirm(`删除新闻板块「${board.name}」？`)) return;
+  await api('/api/news/boards/' + board.id, { method: 'DELETE' });
+  newsActiveBoardId = null;
+  newsItems = [];
+  $('#newsBoardForm').classList.add('hidden');
+  await loadNews();
+});
+
+$('#btnNewsRefresh').addEventListener('click', () => refreshNewsBoard(true));
+$('#btnNewsSendChat').addEventListener('click', async () => {
+  const board = activeNewsBoard();
+  if (!board) return;
+  switchTab('chat');
+  setChatStatus('正在读取新闻板块…');
+  try {
+    const result = await api('/api/news/boards/' + board.id + '/run', { method: 'POST', body: {} });
+    appendSystemMessage(result.text || '没有获取到新闻。');
+    setChatStatus('新闻已发送到对话');
+  } catch (error) {
+    appendSystemMessage('新闻读取失败：' + (error.message || error));
+    setChatStatus('新闻读取失败');
+  }
+});
+
 // ===== AI 状态 + LLM 配置 =====
 async function refreshAiStatus() {
   try {
@@ -1001,7 +1674,8 @@ async function refreshBackupStats() {
     $('#backupStats').textContent =
       `导出时间 ${fmtDateTime(s.exported_at)} · ` +
       `待办 ${s.counts.todos} · 日程 ${s.counts.schedule_events} · ` +
-      `提醒 ${s.counts.reminders} · 设置 ${s.counts.settings}`;
+      `提醒 ${s.counts.reminders} · 月目标 ${s.counts.plan_goals || 0} · ` +
+      `周任务 ${s.counts.plan_tasks || 0} · 设置 ${s.counts.settings}`;
   } catch (e) { $('#backupStats').textContent = '读取失败'; }
 }
 
@@ -1086,6 +1760,7 @@ setInterval(async () => {
       const me = await api('/api/auth/me');
       setUser(me);
       hideLogin();
+      loadHome();
       loadTodos();
       refreshAiStatus();
       refreshBackupStats();
@@ -1111,6 +1786,9 @@ const CHAT_EMPTY_HTML = ``
   + `    <button class="chip" data-sample="每天9点提醒我写日报">⏰ 每天9点写日报</button>`
   + `    <button class="chip" data-sample="我今天还有什么没做">📋 我今天还有什么没做</button>`
   + `    <button class="chip" data-sample="生成今日日报">📝 生成今日日报</button>`
+  + `    <button class="chip" data-sample="把本月目标拆成周任务和每日待办">🧭 拆解月目标</button>`
+  + `    <button class="chip" data-sample="今天有哪些科技新闻">📰 今日科技新闻</button>`
+  + `    <button class="chip" data-sample="每天8点推送科技新闻">⏰ 订阅科技新闻</button>`
   + `    <button class="chip" data-sample="把买牛奶标记完成">✔️ 把买牛奶标记完成</button>`
   + `  </div>`
   + `</div>`;
@@ -1433,6 +2111,7 @@ const SLASH_COMMANDS = [
   { cmd: '/worktree', desc: '打开工作区 / Worktree 面板', usage: '/worktree' },
   { cmd: '/mcp', desc: '打开 MCP 管理', usage: '/mcp' },
   { cmd: '/automations', desc: '打开 Scheduled tasks', usage: '/automations' },
+  { cmd: '/news', desc: '读取新闻板块或搜索新闻', usage: '/news 科技 / /news AI 芯片' },
   { cmd: '/status', desc: '显示系统状态', usage: '/status' },
   { cmd: '/compact', desc: '压缩当前会话上下文', usage: '/compact' },
   { cmd: '/fork', desc: 'Fork 当前会话', usage: '/fork' },
@@ -1534,6 +2213,16 @@ function chooseMentionActive() {
 }
 
 function switchTab(name) {
+  if (name === 'chat' && window.matchMedia('(min-width: 1200px)').matches) {
+    $$('.panel').forEach((panel) => panel.classList.remove('active'));
+    $('#panel-home').classList.add('active');
+    $$('.tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.tab === 'chat'));
+    $('#planViewTabs').classList.add('hidden');
+    setTimeout(() => $('#chatInput').focus(), 40);
+    return;
+  }
+  if (name === 'plan') return showPlanView(activePlanView);
+  if (name === 'todos') return showPlanView('todos');
   const btn = document.querySelector('.tab[data-tab="' + name + '"]');
   if (btn) btn.click();
 }
@@ -1563,7 +2252,9 @@ async function handleSlashCommand(text) {
   if (cmd === '/goal') {
     if (!rest) return appendSystemMessage('用法：`/goal 要持续输出的目标`；也可以点输入区的「目标」状态补成果。');
     composerState.goal = rest;
+    composerState.goalMode = true;
     localStorage.setItem(GOAL_KEY, rest);
+    localStorage.setItem(GOAL_MODE_KEY, '1');
     renderContextChips();
     appendSystemMessage('🎯 已设置持续目标：' + rest);
     return;
@@ -1600,6 +2291,24 @@ async function handleSlashCommand(text) {
     switchTab('reminders');
     setTimeout(() => switchReminderView('automations'), 50);
     appendSystemMessage('已打开自动化任务。');
+    return;
+  }
+  if (cmd === '/news') {
+    setChatStatus('正在读取新闻…');
+    try {
+      const boards = (await api('/api/news/boards')).items || [];
+      const board = rest
+        ? boards.find((item) => item.name === rest || item.name.includes(rest))
+        : boards[0];
+      const result = board
+        ? await api('/api/news/boards/' + board.id + '/run', { method: 'POST', body: {} })
+        : await api('/api/news/search', { method: 'POST', body: { query: rest || '今日要闻' } });
+      appendSystemMessage(result.text || '没有获取到新闻。');
+      setChatStatus('新闻已更新');
+    } catch (e) {
+      appendSystemMessage('新闻读取失败：' + e.message);
+      setChatStatus('新闻读取失败');
+    }
     return;
   }
   if (cmd === '/status') {
@@ -1801,8 +2510,9 @@ async function sendChatMessage(message, container, opts = {}) {
       characters: a.characters || 0,
     })),
     images: composerState.images.map((img) => ({ name: img.name || '图片' })),
-    goal: composerState.goal || '',
-    outcomes: composerState.outcomes || '',
+    goal: composerState.goalMode ? composerState.goal : '',
+    outcomes: composerState.goalMode ? composerState.outcomes : '',
+    goalMode: !!composerState.goalMode,
     plan: !!opts.planModeOverride,
     approvalMode: approvalMode(),
   };
@@ -1854,8 +2564,8 @@ async function sendChatMessage(message, container, opts = {}) {
         deepThink: withThink,
         approvalMode: approvalMode(),
         planMode: opts.planModeOverride === true,
-        goal: composerState.goal,
-        outcomes: composerState.outcomes,
+        goal: composerState.goalMode ? composerState.goal : '',
+        outcomes: composerState.goalMode ? composerState.outcomes : '',
         attachments: composerState.attachments,
         images: composerState.images,
         model: selectedModel() || undefined,
@@ -2038,8 +2748,6 @@ $('#chatInput').addEventListener('keydown', (e) => {
   }
 });
 $('#btnChatSend').addEventListener('click', sendChat);
-$('#btnChatClear').addEventListener('click', () => clearChat());
-
 // ===== 消息操作（复制 / 重新生成）+ 代码块复制 —— 事件委托 =====
 function copyText(text, btn) {
   const done = () => { if (btn) { const old = btn.textContent; btn.textContent = '✓ 已复制'; setTimeout(() => btn.textContent = old, 1500); } };
@@ -2297,11 +3005,14 @@ async function loadSessionList() {
       if (!groups.has(project)) groups.set(project, []);
       groups.get(project).push(s);
     }
+    const showProjectGroups = groups.size > 1;
     for (const [project, list] of groups) {
-      const header = document.createElement('div');
-      header.className = 'session-group';
-      header.textContent = project;
-      box.appendChild(header);
+      if (showProjectGroups) {
+        const header = document.createElement('div');
+        header.className = 'session-group';
+        header.textContent = project;
+        box.appendChild(header);
+      }
       for (const s of list) {
       const el = document.createElement('div');
       el.className = 'session-item' + (Number(s.id) === getCurrentSessionId() ? ' active' : '');
@@ -2309,9 +3020,9 @@ async function loadSessionList() {
       el.innerHTML = `
         <span class="si-icon">💬</span>
         <span class="si-title">${escapeHtml(s.title || '新对话')}</span>
-        <button class="si-proj" title="修改项目">📁</button>
-        <button class="si-fork" title="Fork 会话">⑂</button>
-        <button class="si-del" title="删除会话">✕</button>`;
+        <button class="si-proj" title="修改项目" aria-label="修改项目">📁</button>
+        <button class="si-fork" title="Fork 会话" aria-label="Fork 会话">⑂</button>
+        <button class="si-del" title="删除会话" aria-label="删除会话">✕</button>`;
       // 点击主体 → 回放
       el.querySelector('.si-title').parentElement.addEventListener('click', async (e) => {
         if (e.target.classList.contains('si-del') || e.target.classList.contains('si-fork') || e.target.classList.contains('si-proj')) return;
@@ -2347,9 +3058,11 @@ async function loadSessionList() {
 }
 /** 打开某个历史会话：回放消息到中间区 */
 let sessionSearchTimer = null;
-$('#sessionSearch').addEventListener('input', () => {
+const sessionSearchEl = $('#sessionSearch');
+sessionSearchEl.addEventListener('input', () => {
+  sessionSearchEl.dataset.userEdited = '1';
   clearTimeout(sessionSearchTimer);
-  const q = $('#sessionSearch').value.trim();
+  const q = sessionSearchEl.textContent.trim();
   if (!q) { loadSessionList(); return; }
   sessionSearchTimer = setTimeout(async () => {
     try {
@@ -2420,13 +3133,44 @@ $('#historyBackdrop')?.addEventListener('click', closeHistoryDrawer);
 window.addEventListener('resize', () => {
   if (window.innerWidth > 860) closeHistoryDrawer();
 });
-$('#btnNewChat').addEventListener('click', () => {
+function resetComposerTransient() {
+  composerState.attachments = [];
+  composerState.images = [];
+  const input = $('#chatInput');
+  if (input) input.value = '';
+  const search = $('#sessionSearch');
+  if (search) search.textContent = '';
+  renderSlashMenu('');
+  renderMentionMenu('');
+  closeComposerPanel();
+  renderContextChips();
+  autoResizeInput();
+}
+
+function startNewChat(options = {}) {
+  const hasMessages = Boolean(document.querySelector('#chatWindow .chat-msg'));
+  const hasDraft = Boolean(
+    ($('#chatInput') && $('#chatInput').value.trim()) ||
+    composerState.attachments.length ||
+    composerState.images.length
+  );
+  if (options.confirmStart && (hasMessages || hasDraft) &&
+      !confirm('结束当前窗口并开始新对话？历史记录仍会保留。')) return;
+
+  if (chatAbort) {
+    chatAbort.abort();
+    chatAbort = null;
+  }
   closeHistoryDrawer();
   setCurrentSessionId(null); // 下次发消息自动建新会话
   clearChat();
+  resetComposerTransient();
+  loadSessionList();
   setChatStatus('新对话');
-  $('#chatInput').focus();
-});
+  setTimeout(() => $('#chatInput').focus(), 0);
+}
+
+$('#btnNewChat').addEventListener('click', () => startNewChat());
 
 // ===== PPT 实时预览侧栏 =====
 const pvState = { draft: null, theme: null, page: 1 };
@@ -2519,19 +3263,14 @@ $('#btnDeepThink').addEventListener('click', () => {
   localStorage.setItem(THINK_KEY, on ? '1' : '0');
   renderDeepThinkToggle();
   setChatStatus(on ? '🧠 Think 已开启，本次回复会展示思考链路' : 'Think 已关闭');
-  if (on) {
-    localStorage.setItem(TK_KEY, '1');
-    renderToolkit();
-    activateTkMode('think');
-  } else {
-    cotClear();
-  }
+  if (!on) cotClear();
 });
 
 // ===== 三档审批模式 =====
 const APPROVAL_KEY = 'workbuddy_approval_mode';
 const GOAL_KEY = 'workbuddy_goal';
 const OUTCOMES_KEY = 'workbuddy_outcomes';
+const GOAL_MODE_KEY = 'workbuddy_goal_mode';
 const PLAN_KEY = 'workbuddy_plan_mode';
 const APPROVAL_LABEL = { ask: '请求批准', auto: '帮我批准', full: '完全访问' };
 function approvalMode() {
@@ -2575,6 +3314,7 @@ const composerState = {
   images: [],
   goal: localStorage.getItem(GOAL_KEY) || '',
   outcomes: localStorage.getItem(OUTCOMES_KEY) || '',
+  goalMode: localStorage.getItem(GOAL_MODE_KEY) === '1',
   plan: localStorage.getItem(PLAN_KEY) === '1',
 };
 
@@ -2598,24 +3338,42 @@ function renderContextChips() {
   const box = $('#contextChips');
   if (!box) return;
   box.innerHTML = '';
-  if (composerState.goal) {
+  if (composerState.goalMode && composerState.goal) {
     const chip = document.createElement('span');
     chip.className = 'context-chip goal';
-    chip.innerHTML = `🎯 <b>持续目标</b> ${escapeHtml(composerState.goal.slice(0, 48))} <button title="清除目标">✕</button>`;
-    chip.querySelector('button').addEventListener('click', () => {
+    chip.innerHTML = `🎯 <b>持续目标</b> ${escapeHtml(composerState.goal.slice(0, 48))} <button title="清除目标" aria-label="清除目标">✕</button>`;
+    chip.addEventListener('click', (event) => {
+      if (event.target.closest('button')) return;
+      openGoalPanel();
+    });
+    chip.querySelector('button').addEventListener('click', (event) => {
+      event.stopPropagation();
       composerState.goal = '';
       localStorage.removeItem(GOAL_KEY);
+      if (!composerState.outcomes) {
+        composerState.goalMode = false;
+        localStorage.removeItem(GOAL_MODE_KEY);
+      }
       renderContextChips();
     });
     box.appendChild(chip);
   }
-  if (composerState.outcomes) {
+  if (composerState.goalMode && composerState.outcomes) {
     const chip = document.createElement('span');
     chip.className = 'context-chip outcome';
-    chip.innerHTML = `📈 <b>成果</b> ${escapeHtml(composerState.outcomes.slice(0, 48))} <button title="清除成果">✕</button>`;
-    chip.querySelector('button').addEventListener('click', () => {
+    chip.innerHTML = `📈 <b>成果</b> ${escapeHtml(composerState.outcomes.slice(0, 48))} <button title="清除成果" aria-label="清除成果">✕</button>`;
+    chip.addEventListener('click', (event) => {
+      if (event.target.closest('button')) return;
+      openGoalPanel();
+    });
+    chip.querySelector('button').addEventListener('click', (event) => {
+      event.stopPropagation();
       composerState.outcomes = '';
       localStorage.removeItem(OUTCOMES_KEY);
+      if (!composerState.goal) {
+        composerState.goalMode = false;
+        localStorage.removeItem(GOAL_MODE_KEY);
+      }
       renderContextChips();
     });
     box.appendChild(chip);
@@ -2625,7 +3383,7 @@ function renderContextChips() {
     chip.className = 'context-chip file';
     const label = a.folder ? `📁 ${a.path}` : `📄 ${a.name || '附件'}`;
     const engine = a.converted ? ` <em>${escapeHtml(a.vendor || 'MarkItDown')}</em>` : '';
-    chip.innerHTML = `${escapeHtml(label)}${engine} <button title="移除">✕</button>`;
+    chip.innerHTML = `${escapeHtml(label)}${engine} <button title="移除附件" aria-label="移除附件">✕</button>`;
     chip.querySelector('button').addEventListener('click', () => {
       composerState.attachments.splice(i, 1);
       renderContextChips();
@@ -2635,7 +3393,7 @@ function renderContextChips() {
   composerState.images.forEach((img, i) => {
     const chip = document.createElement('span');
     chip.className = 'context-chip image';
-    chip.innerHTML = `🖼 ${escapeHtml(img.name || '图片')} <button title="移除">✕</button>`;
+    chip.innerHTML = `🖼 ${escapeHtml(img.name || '图片')} <button title="移除图片" aria-label="移除图片">✕</button>`;
     chip.querySelector('button').addEventListener('click', () => {
       composerState.images.splice(i, 1);
       renderContextChips();
@@ -2654,12 +3412,13 @@ function renderComposerTrigger() {
   addBtn.textContent = '＋ 添加' + (extra.length ? ' · ' + extra.join(' / ') : '');
   addBtn.classList.toggle('on', extra.length > 0);
 
-  const hasGoal = Boolean(composerState.goal || composerState.outcomes);
   const goalBtn = $('#btnGoalMode');
   if (goalBtn) {
-    goalBtn.classList.toggle('on', hasGoal);
-    goalBtn.setAttribute('aria-pressed', String(hasGoal));
-    goalBtn.title = hasGoal ? '编辑持续目标和成果' : '设置持续目标';
+    goalBtn.classList.toggle('on', composerState.goalMode);
+    goalBtn.setAttribute('aria-pressed', String(composerState.goalMode));
+    goalBtn.title = composerState.goalMode
+      ? '关闭目标模式；点击上方目标芯片可编辑'
+      : '开启目标模式';
   }
 
   const planBtn = $('#btnPlanMode');
@@ -2673,7 +3432,9 @@ function renderComposerTrigger() {
   if (input) {
     input.placeholder = composerState.plan
       ? '描述任务，先生成一份可执行计划…'
-      : '输入消息，Enter 发送，Shift+Enter 换行';
+      : composerState.goalMode
+        ? '围绕持续目标输入下一步…'
+        : '输入消息，Enter 发送，Shift+Enter 换行';
   }
 }
 
@@ -2698,6 +3459,9 @@ function openGoalPanel() {
     actions.children[0].addEventListener('click', () => {
       composerState.goal = goalInput.value.trim();
       composerState.outcomes = outcomeInput.value.trim();
+      composerState.goalMode = Boolean(composerState.goal || composerState.outcomes);
+      if (composerState.goalMode) localStorage.setItem(GOAL_MODE_KEY, '1');
+      else localStorage.removeItem(GOAL_MODE_KEY);
       if (composerState.goal) localStorage.setItem(GOAL_KEY, composerState.goal);
       else localStorage.removeItem(GOAL_KEY);
       if (composerState.outcomes) localStorage.setItem(OUTCOMES_KEY, composerState.outcomes);
@@ -2709,8 +3473,10 @@ function openGoalPanel() {
     actions.children[1].addEventListener('click', () => {
       composerState.goal = '';
       composerState.outcomes = '';
+      composerState.goalMode = false;
       localStorage.removeItem(GOAL_KEY);
       localStorage.removeItem(OUTCOMES_KEY);
+      localStorage.removeItem(GOAL_MODE_KEY);
       renderContextChips();
       closeComposerPanel();
       setChatStatus('目标状态已清除');
@@ -2719,7 +3485,21 @@ function openGoalPanel() {
   });
 }
 
-$('#btnGoalMode').addEventListener('click', openGoalPanel);
+$('#btnGoalMode').addEventListener('click', () => {
+  if (composerState.goalMode) {
+    composerState.goalMode = false;
+    localStorage.removeItem(GOAL_MODE_KEY);
+    renderContextChips();
+    setChatStatus('目标模式已关闭');
+    return;
+  }
+  composerState.goalMode = true;
+  localStorage.setItem(GOAL_MODE_KEY, '1');
+  renderContextChips();
+  setChatStatus('目标模式已开启');
+  if (!composerState.goal && !composerState.outcomes) openGoalPanel();
+  else $('#chatInput').focus();
+});
 $('#btnPlanMode').addEventListener('click', () => {
   composerState.plan = !composerState.plan;
   if (composerState.plan) localStorage.setItem(PLAN_KEY, '1');
@@ -2881,21 +3661,51 @@ $('#btnTkClose').addEventListener('click', () => {
   renderToolkit();
 });
 
+const TK_MODE_GROUPS = {
+  computer: 'devices',
+  browser: 'devices',
+  review: 'workbench',
+  workspace: 'workbench',
+  tasks: 'workbench',
+  remote: 'workbench',
+};
+const TK_GROUP_DEFAULTS = {
+  devices: 'computer',
+  workbench: 'review',
+};
+
 function activateTkMode(mode) {
-  currentTkMode = mode;
-  $$('.tk-mode').forEach((b) => b.classList.toggle('active', b.dataset.tkMode === mode));
-  $$('.tk-pane').forEach((v) => v.classList.toggle('active', v.id === 'tk-pane-' + mode));
-  if (mode === 'computer') refreshComputer();
-  if (mode === 'browser') refreshBrowser();
-  if (mode === 'memory') loadMemories();
-  if (mode === 'review') loadReview();
-  if (mode === 'workspace') { loadWorkspace(); loadWorkspaceFiles(wsCurrentPath || '.'); }
-  if (mode === 'tasks') loadTasks();
-  if (mode === 'remote') loadRemote();
-  if (mode === 'skills') loadSkills();
+  const resolved = TK_GROUP_DEFAULTS[mode] || mode || 'think';
+  const group = TK_MODE_GROUPS[resolved] || resolved;
+  currentTkMode = resolved;
+  $$('.tk-mode').forEach((b) => {
+    const active = b.dataset.tkMode === group;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', String(active));
+  });
+  $$('.tk-pane').forEach((v) => v.classList.toggle('active', v.id === 'tk-pane-' + group));
+  $$('.tk-submode').forEach((b) => {
+    const active = b.dataset.tkSubmode === resolved;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', String(active));
+  });
+  $$('.tk-subpane').forEach((v) => v.classList.toggle('active', v.id === 'tk-sub-' + resolved));
+  if (resolved === 'computer') refreshComputer();
+  if (resolved === 'browser') refreshBrowser();
+  if (resolved === 'memory') loadMemories();
+  if (resolved === 'review') loadReview();
+  if (resolved === 'workspace') { loadWorkspace(); loadWorkspaceFiles(wsCurrentPath || '.'); }
+  if (resolved === 'tasks') loadTasks();
+  if (resolved === 'remote') loadRemote();
+  if (resolved === 'skills') loadSkills();
   refreshCapabilityStatus();
 }
-$$('.tk-mode').forEach((btn) => btn.addEventListener('click', () => activateTkMode(btn.dataset.tkMode)));
+function activateTkGroup(group) {
+  const currentGroup = TK_MODE_GROUPS[currentTkMode] || currentTkMode;
+  activateTkMode(currentGroup === group ? currentTkMode : TK_GROUP_DEFAULTS[group] || group);
+}
+$$('.tk-mode').forEach((btn) => btn.addEventListener('click', () => activateTkGroup(btn.dataset.tkMode)));
+$$('.tk-submode').forEach((btn) => btn.addEventListener('click', () => activateTkMode(btn.dataset.tkSubmode)));
 
 // ===== Review 面板（仿 Codex /review） =====
 async function loadReview() {
@@ -3330,7 +4140,9 @@ function cotEnd() {
   renderCOT();
 }
 function cotClear() {
-  cotBegin();
+  cotState.items = [];
+  cotState.running = false;
+  renderCOT();
 }
 $('#btnCOTClear').addEventListener('click', cotClear);
 
@@ -3806,9 +4618,12 @@ function toggleTheme() {
 const PALETTE_ACTIONS = [
   { id: 'new_chat', label: '新对话', desc: '开始一个新的会话', run: () => $('#btnNewChat').click() },
   { id: 'search', label: '搜索会话', desc: '聚焦会话搜索框', run: () => { switchTab('chat'); setTimeout(() => $('#sessionSearch').focus(), 50); } },
-  { id: 'goal', label: '目标状态', desc: '设置持续目标与可衡量成果', run: () => { switchTab('chat'); $('#btnGoalMode').click(); } },
+  { id: 'goal', label: '目标模式', desc: '切换持续目标状态；内容可点击目标芯片编辑', run: () => { switchTab('chat'); $('#btnGoalMode').click(); } },
   { id: 'plan', label: '计划模式', desc: '切换持续计划状态', run: () => { switchTab('chat'); $('#btnPlanMode').click(); } },
   { id: 'review', label: '审阅变更', desc: '打开 Review 面板并审阅', run: () => { handleSlashCommand('/review'); } },
+  { id: 'plan', label: '计划工作台', desc: '查看月目标、周任务和完成率', run: () => { switchTab('plan'); setTimeout(loadPlan, 50); } },
+  { id: 'todos', label: '待办清单', desc: '打开计划中的全部待办视图', run: () => showPlanView('todos') },
+  { id: 'news', label: '新闻简报', desc: '打开新闻板块并读取最新内容', run: () => { switchTab('news'); setTimeout(() => loadNews({ force: true }), 50); } },
   { id: 'worktree', label: '工作区 / Worktree', desc: 'Local / Worktree handoff', run: () => { localStorage.setItem(TK_KEY, '1'); renderToolkit(); activateTkMode('workspace'); } },
   { id: 'tasks', label: '后台任务', desc: '创建/查看后台 Agent 任务', run: () => { localStorage.setItem(TK_KEY, '1'); renderToolkit(); activateTkMode('tasks'); } },
   { id: 'remote', label: '远程主机', desc: 'Remote / Handoff', run: () => { localStorage.setItem(TK_KEY, '1'); renderToolkit(); activateTkMode('remote'); } },
@@ -3818,7 +4633,7 @@ const PALETTE_ACTIONS = [
   { id: 'automations', label: '自动化任务', desc: '管理 Agent 定时任务', run: () => { switchTab('reminders'); setTimeout(() => switchReminderView('automations'), 50); } },
   { id: 'fork', label: 'Fork 当前会话', desc: '复制当前会话', run: () => handleSlashCommand('/fork') },
   { id: 'theme', label: '切换主题', desc: '浅色 / 深色', run: () => toggleTheme() },
-  { id: 'clear', label: '清空对话', desc: '清空当前聊天窗口', run: () => clearChat() },
+  { id: 'clear', label: '重开对话', desc: '清空当前窗口并开始新会话，历史仍会保留', run: () => startNewChat({ confirmStart: true }) },
   { id: 'stop', label: '停止生成', desc: '停止当前回复', run: () => $('#btnChatStop').click() },
 ];
 let paletteIndex = 0;
@@ -3847,6 +4662,15 @@ function renderCommandPalette(filter) {
     if (a) a.run();
   }));
 }
+function renderCommandShortcut() {
+  const btn = $('#btnCommandPalette');
+  if (!btn) return;
+  const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent);
+  const label = isMac ? '⌘K' : 'Ctrl K';
+  btn.textContent = label;
+  btn.title = `命令面板 (${isMac ? '⌘K' : 'Ctrl+K'})`;
+}
+renderCommandShortcut();
 $('#btnCommandPalette').addEventListener('click', openCommandPalette);
 $('#cpInput').addEventListener('input', (e) => { paletteIndex = 0; renderCommandPalette(e.target.value); });
 $('#commandPalette').addEventListener('click', (e) => { if (e.target.id === 'commandPalette') closeCommandPalette(); });
@@ -4103,7 +4927,7 @@ function renderAutomations(items) {
     el.className = 'item';
     el.innerHTML = `
       <div class="body">
-        <div class="title">${escapeHtml(a.name)} <span class="badge">${escapeHtml(a.cron)}</span></div>
+        <div class="title">${escapeHtml(a.name)} ${a.kind === 'news_digest' ? '<span class="badge p3">新闻</span>' : ''} <span class="badge">${escapeHtml(a.cron)}</span></div>
         <div class="meta">${escapeHtml((a.prompt || '').slice(0, 120))}</div>
         <div class="meta">最近运行：${a.last_run_at ? escapeHtml(a.last_run_at) + ' · ' + escapeHtml(a.last_status || '') : '从未运行'}</div>
       </div>

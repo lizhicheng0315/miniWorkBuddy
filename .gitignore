@@ -2,7 +2,7 @@
 node_modules/
 
 # 数据与日志（含用户数据，永不推送）
-data/
+/data/
 *.log
 *.db
 *.sqlite*
@@ -26,6 +26,9 @@ dist/
 
 # 本地预览与测试产物
 output/
+
+# 本地审计脚本与中间产物（前端精简审计，见 README「前端模块精简审计」）
+.tmp-audit/
 
 # 证书与密钥
 certs/

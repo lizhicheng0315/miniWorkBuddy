@@ -2,6 +2,7 @@
 
 const express = require('express');
 const db = require('../db');
+const plan = require('../services/plan');
 const { requireAuth } = require('../middleware/auth');
 const router = express.Router();
 
@@ -120,10 +121,15 @@ router.post('/batch', (req, res) => {
 });
 
 router.post('/', (req, res) => {
-  const { title, notes, priority, category, due_at, recur_rule } = req.body || {};
+  const {
+    title, notes, priority, category, due_at, recur_rule,
+    plan_goal_id, plan_task_id, planned_for, rollover_enabled,
+  } = req.body || {};
   if (!title || !String(title).trim()) {
     return res.status(400).json({ error: 'title 必填' });
   }
+  const task = plan_task_id ? plan.getTask(req.user.id, plan_task_id) : null;
+  if (plan_task_id && !task) return res.status(400).json({ error: '周任务不存在' });
   const row = db.insert('todos', {
     user_id: req.user.id,
     title: String(title).trim(),
@@ -133,6 +139,12 @@ router.post('/', (req, res) => {
     due_at: due_at || null,
     status: 'open',
     recur_rule: recur_rule || null,
+    plan_goal_id: task ? task.goal_id : (plan_goal_id || null),
+    plan_task_id: task ? task.id : null,
+    planned_for: planned_for || (due_at ? String(due_at).slice(0, 10) : plan.dateKey()),
+    original_due_at: due_at || null,
+    rollover_enabled: rollover_enabled === false || rollover_enabled === 0 ? 0 : 1,
+    rollover_count: 0,
   });
   res.status(201).json(row);
 });
@@ -141,7 +153,10 @@ router.patch('/:id', (req, res) => {
   const id = Number(req.params.id);
   const cur = db.find('todos', id, req.user.id);
   if (!cur) return res.status(404).json({ error: 'not found' });
-  const fields = ['title', 'notes', 'priority', 'category', 'due_at', 'status'];
+  const fields = [
+    'title', 'notes', 'priority', 'category', 'due_at', 'status',
+    'plan_goal_id', 'plan_task_id', 'planned_for', 'rollover_enabled',
+  ];
   const patch = {};
   for (const f of fields) {
     if (req.body && Object.prototype.hasOwnProperty.call(req.body, f)) {
@@ -152,6 +167,17 @@ router.patch('/:id', (req, res) => {
     patch.completed_at = db.nowIso();
   } else if (patch.status === 'open') {
     patch.completed_at = null;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'due_at') && !cur.original_due_at) {
+    patch.original_due_at = patch.due_at;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'plan_task_id') && patch.plan_task_id) {
+    const task = plan.getTask(req.user.id, patch.plan_task_id);
+    if (!task) return res.status(400).json({ error: '周任务不存在' });
+    patch.plan_goal_id = task.goal_id;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'rollover_enabled')) {
+    patch.rollover_enabled = patch.rollover_enabled ? 1 : 0;
   }
   patch.updated_at = db.nowIso();
   res.json(db.update('todos', id, patch, req.user.id));

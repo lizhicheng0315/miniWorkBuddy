@@ -11,18 +11,41 @@
 
 ## 🆕 近期更新（2026-09）
 
+### 🧹 前端模块精简审计（2026-09-25）
+
+- **样式表合并去重**：`public/styles.css` 原本是「v1 基础样式 + WorkBuddy Theme v3」两套设计的叠加，现合并为单一来源并逐属性去重：
+  **114,684 B → 89,517 B（−21.9%）**，最终 **868 条规则 / 3,259 条声明 / 13 个 `@media`**。
+- **等价性可验证（非目测）**：按 `(media, selector)` 逐条比对合并前后的**有效属性映射**，差异 **0 / 917** 组；
+  产物顺序按每个选择器的**最后出现位置**排序，层叠顺序违规 **0**；产物重新解析后选择器与属性集合零差异（往返自校验），合并幂等。
+- **删除 49 条不可达规则**：29 个类名在 `app.js` / `index.html` / `sw.js` 中完全不出现，含这些类的选择器永远无法匹配。
+  判定时对 `:not()` / `:is()` / `:where()` / `:has()` 参数做保守处理，并额外检查**字符串拼接生成的类名**——
+  `todo-compact` / `todo-loose` 由列表密度下拉框 `'list todo-' + value` 动态生成，已保留。
+- **清理前端死代码**：`app.js` 移除无引用函数 `newsSourceName`；`index.html` 移除 3 个无引用的包裹 `id`
+  （`chatHint` / `llmConfigCard` / `integrationForm`，其内部控件 id 保留）；静态资源版本号更新为 `styles.css?v=71` / `app.js?v=105`。
+- **验收**：`/`、`/index.html`、`/styles.css`、`/app.js`、`/sw.js`、`/manifest.webmanifest`、`/icon.svg`、`/api/health` 全部返回 200，
+  且 HTTP 返回的 `styles.css` 与磁盘内容逐字符一致。
+
+> **已知问题（本次审计发现，未改动代码）**：`app.js` 会向 `#compStatus` 写入 Computer Use 状态（沙箱 / 系统信息），
+> 但 `public/` 中不存在该 `id`，写入静默失效，因此该状态行始终不显示。
+
+### 其他近期更新
+
 - **对话内 COT 链路**：Think、工具调用、批准与结果直接附着到对应回复，轨迹随消息持久化，历史会话可继续展开。
 - **MarkItDown 文档上下文**：对话输入区支持直接上传 PDF、Word、PPT、Excel、EPUB、HTML 和常见代码文本，服务端转换为 Markdown 后注入当前对话。
 - **Codex 式核心模块融合**：补齐 Computer Use、Browser Use、长期 Memory、Skills、Review、Worktree、MCP、后台任务和远程 handoff，并统一接入 Agent 工具循环。
+- **新闻模块**：固定 RSS/Atom 源注册表、可定制板块、关键词过滤、六个新闻模板、对话内检索与定时系统通知推送。
+- **计划工作台**：月目标 → 周任务 → 每日待办三层结构、完成率仪表盘、逾期自动顺延，并支持对话内直接拆解目标。
+- **三栏常驻工作台**：左侧功能导航、中间详情页、右侧常驻 AI 助理；切换模块时对话上下文不丢失。
 - **三档权限模式**：对话区弹层切换「请求批准 / 帮我批准 / 完全访问」，敏感操作可在消息内批准或拒绝。
-- **更紧凑的 Composer**：文件/文件夹/图片、目标和计划改为输入区状态与上拉面板，权限菜单不再占用页面主体。
-- **界面重构**：采用 porcelain / ink / jade / amber 的安静编辑式视觉，统一浅色与深色主题、原生控件和 PWA 主题色。
+- **更紧凑的 Composer**：文件/文件夹/图片、目标和计划改为输入区状态与上拉面板；目标与计划都可独立持久开关，目标内容关闭后保留但不注入对话。
+- **界面重构**：采用 porcelain / ink / jade / amber 的安静编辑式视觉，工具台按「思路 / 设备 / 记忆 / 工作台 / 技能」分组，统一浅色与深色主题、原生控件和 PWA 主题色。
 - **移动端优化**：会话历史改为抽屉，工具台在桌面端停靠并为内容让位，`390×844` 视口无横向溢出。
 - **Playwright 验收链路**：项目本地安装并使用 `playwright-cli`，覆盖桌面端、移动端、上传和关键交互截图检查。
 
 ## ✨ 核心特性
 
 ### 🤖 Agent 式对话（核心界面）
+- **常驻右侧助理**：宽屏下对话框固定在右侧，切换首页、计划、新闻等详情页时仍然保留，底部输入框随时可用
 - **自然语言管理一切**：「明天下午3点开周会」「提醒我买牛奶」「每天9点写日报」「把买牛奶标记完成」
 - **Plan-then-Execute Agent 循环**：复合任务一句话完成——「创建待办'写周报'并每天9点提醒我」自动拆成两步工具调用
 - **Codex 式迭代工具循环**：模型逐步调用工具/技能 → 观察工具结果 → 继续决策，直到输出 final；比一次性计划更能自动应对截图、页面快照、沙箱命令等需要看结果再行动的场景
@@ -46,6 +69,23 @@
 - 多引擎降级链：Bing API（可选 key）→ **Bing HTML**（cn.bing.com 国内免key直连）→ DuckDuckGo
 - 搜索结果由 LLM 汇总成带来源链接的回答
 - 对话右上角「联网」开关随时启停
+
+### 📰 新闻聚合与定时推送
+- **固定高质量源注册表**：人民网、新华网、新浪、少数派、雷锋网、钛媒体、极客公园、IT之家、The Verge、Ars Technica、GitHub Blog、OpenAI News、arXiv、Nature、ScienceDaily 等
+- **六个默认模板**：今日要闻、中文科技、AI 与开发、财经观察、科学前沿、文化生活
+- **可定制板块**：自由组合信息源、包含/排除关键词、条数和排序方式
+- **对话联动**：可说「看看今天的科技新闻」「搜索芯片新闻」「每天 8 点推送科技新闻」
+- **定时推送**：新闻板块直接生成专用 automation，后台抓取后通过 WorkBuddy 系统通知推送
+- **只允许注册表中的源**：用户不能传入任意 URL，避免 SSRF；单个源失败不影响其他来源
+
+### 🧭 计划工作台
+- **三层计划**：月目标、周任务、每日待办完整串联，关联关系直接落 SQLite
+- **单入口融合**：顶部导航只保留「计划」，在其中切换「计划看板 / 全部待办」，避免计划与待办重复
+- **完成率仪表盘**：月目标权重进度、周任务完成率、今日完成率、逾期与顺延统计
+- **周视图看板**：按月自动生成周列，任务进度由关联每日待办实时计算
+- **逾期自动顺延**：服务启动和每天 0 点自动检查；每日待办顺延到今天、周任务顺延到当前周、月目标顺延到当前月
+- **对话联动**：「把本月目标拆成周任务和每日待办」「查看本月完成率」直接写入或读取工作台
+- **备份覆盖**：月目标与周任务随 WorkBuddy 数据备份一起导出和恢复
 
 ### 📊 PPT 助理（ppt-master 方法论）
 ```
@@ -222,6 +262,30 @@ npm start
 | `GET` | `/api/ppt/draft` | 当前用户 PPT 草稿 |
 | `GET` | `/api/ppt/download/t/:ticket` | 票据下载 .pptx（10 分钟有效） |
 
+### 新闻
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/news/catalog` | 信息源、模板与分类目录 |
+| `GET / POST` | `/api/news/boards` | 新闻板块列表 / 新建 |
+| `PATCH / DELETE` | `/api/news/boards/:id` | 更新或删除自定义板块 |
+| `POST` | `/api/news/boards/:id/run` | 抓取当前板块并生成 Markdown 简报 |
+| `POST` | `/api/news/boards/:id/schedule` | 设置或取消定时新闻推送 |
+| `GET` | `/api/news/items` | 按板块、关键词、时间与来源查询条目 |
+| `POST` | `/api/news/search` | 跨已配置信息源搜索关键词 |
+
+### 计划工作台
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/plan/dashboard?month=YYYY-MM` | 月目标、周任务、每日待办与完成率 |
+| `GET / POST` | `/api/plan/goals` | 月目标列表 / 新建 |
+| `PATCH / DELETE` | `/api/plan/goals/:id` | 更新或删除月目标 |
+| `GET / POST` | `/api/plan/tasks` | 周任务列表 / 新建 |
+| `PATCH / DELETE` | `/api/plan/tasks/:id` | 更新或删除周任务 |
+| `POST` | `/api/plan/todos` | 创建计划内每日待办 |
+| `POST` | `/api/plan/rollover` | 立即执行逾期顺延 |
+
 ### 会话历史
 
 | 方法 | 路径 | 说明 |
@@ -345,8 +409,8 @@ npm start
 ## 🗄 数据存储
 
 - 单文件 SQLite：`./data/workbuddy.db`（首次写入自动持久化）
-- WASM 文件：`./data/sql-wasm.wasm`（首次启动自动从 `node_modules` 复制）
-- 核心表：`todos` / `schedule_events` / `reminders` / `settings` / `users` / `chat_sessions` / `chat_messages` / `memory_items` / `memory_events`
+- WASM 文件：`./data/sql-wasm.wasm`（开发模式从 `node_modules` 复制，便携版从 exe 同目录复制）
+- 核心表：`todos` / `plan_goals` / `plan_tasks` / `schedule_events` / `reminders` / `automations` / `news_boards` / `settings` / `users` / `chat_sessions` / `chat_messages` / `memory_items` / `memory_events`
 - 备份导出格式：包含 `version / exported_at / tables.*` 的 JSON 快照
 
 ## 📂 项目结构
@@ -360,8 +424,8 @@ dsh/
 ├── .env.example
 ├── public/                  # 前端静态文件（无构建）
 │   ├── index.html
-│   ├── app.js               # 对话/待办/PPT预览/历史栏 全部交互
-│   ├── styles.css           # 蓝白主题
+│   ├── app.js               # 对话/计划/待办/新闻/PPT预览/历史栏 全部交互
+│   ├── styles.css           # 单一主题入口（v1 布局 + Theme v3 已合并去重）
 │   └── sw.js                # PWA Service Worker
 ├── src/
 │   ├── config.js
@@ -370,6 +434,8 @@ dsh/
 │   ├── routes/
 │   │   ├── todos.js / schedule.js / reminders.js / backup.js
 │   │   ├── ai.js            # SSE 流式对话 + 用量统计
+│   │   ├── plan.js          # 月目标、周任务、每日待办与顺延
+│   │   ├── news.js          # 新闻目录、板块、搜索与推送
 │   │   ├── integrations.js  # 飞书/企微/钉钉对接配置
 │   │   ├── ppt.js           # 草稿查询 + 票据下载
 │   │   ├── chathistory.js   # 会话历史 CRUD
@@ -380,6 +446,8 @@ dsh/
 │   │   └── media.js         # 截图鉴权下载
 │   └── services/
 │       ├── notifier.js / scheduler.js / backup.js
+│       ├── news.js          # RSS/Atom 抓取、过滤、模板与简报
+│       ├── plan.js          # 三层计划、完成率与逾期顺延
 │       ├── llm.js           # 带重试+超时的 LLM 客户端（chat/chatStream/getClient）
 │       ├── ai.js            # LLM 业务逻辑（日报/周报/拆解…）
 │       ├── nlp.js           # TOOLS 工具注册表 + Agent Plan-then-Execute 循环
@@ -392,6 +460,7 @@ dsh/
 │       ├── computer.js      # PowerShell + user32 电脑控制
 │       ├── browser.js       # CDP 浏览器客户端
 │       └── media.js         # 截图文件管理
+├── src/data/news-sources.json # 固定新闻源与默认模板注册表
 ├── skills/
 │   ├── computer-use/SKILL.md
 │   ├── browser-use/SKILL.md
@@ -400,6 +469,9 @@ dsh/
 │   ├── smoke.js             # 端到端 API 测试（12 场景）
 │   ├── test-codex-modules.js # memory/skills/computer/browser 冒烟
 │   ├── test-agent.js        # Agent 工具循环 mock 测试
+│   ├── test-news.js         # 新闻解析、板块 CRUD 与定时注册测试
+│   ├── test-news-live.js    # 真实 RSS 与定时推送验收
+│   ├── test-plan.js         # 计划层级、完成率与对话拆解测试
 │   ├── test-markdown.js     # Markdown 渲染 + XSS 防护测试（11 例）
 │   ├── test-ppt.js          # PPT 导出真实文件测试
 │   └── test-pageno.js       # 中文数字页码测试
@@ -425,6 +497,15 @@ node scripts/test-nlp.js
 
 # Agent 工具循环（mock LLM 决策，验证多步工具调用）
 node scripts/test-agent.js
+
+# 新闻解析、板块 CRUD、模板与定时任务注册
+npm run test:news
+
+# 计划层级、完成率、逾期顺延与对话拆解
+npm run test:plan
+
+# 真实 RSS 抓取、对话工具与定时推送链路（需要联网）
+node scripts/test-news-live.js
 
 # Markdown 渲染 + XSS 防护（11 例）
 node scripts/test-markdown.js
@@ -554,9 +635,9 @@ workbuddy_reminders_enabled 4
 
 默认写入 `data/logs/access-YYYY-MM-DD.log`（JSON Lines），每天一个文件。控制台同步彩色输出。可通过 `LOG_TO_FILE=false` 关闭。
 
-## 📦 打包成单文件 .exe
+## 📦 打包成便携版 .exe
 
-用 [@yao-pkg/pkg](https://github.com/yao-pkg/pkg) 把整个项目打成单文件可执行（**不依赖 Node 环境**，双击即用）。
+用 [@yao-pkg/pkg](https://github.com/yao-pkg/pkg) 把整个项目打成便携可执行包（**不依赖 Node 环境**，双击即用）。SQLite 的 `sql-wasm.wasm` 需要与 exe 放在同一目录。
 
 ### 一次打包
 
@@ -567,7 +648,7 @@ npm install --save-dev @yao-pkg/pkg
 # 2. 打包当前平台
 npm run build
 
-# 输出：dist/workbuddy-win-x64.exe（约 70MB）
+# 输出：dist/workbuddy-win-x64.exe + dist/sql-wasm.wasm
 ```
 
 ### 跨平台打包（在某平台打某平台）
@@ -579,7 +660,7 @@ npm run build -- --target win-x64
 npm run build -- --target macos-arm64
 ```
 
-> ⚠️ pkg 默认产物体积约 60-90MB（内嵌 Node 18 运行时 + sql.js WASM + 全部依赖）
+> ⚠️ 当前 Windows 便携包约 48MB（内嵌 Node 18 运行时 + 全部依赖），另有约 0.6MB 的 `sql-wasm.wasm`
 
 ### 用户分发包
 
@@ -588,6 +669,7 @@ npm run build -- --target macos-arm64
 ```
 WorkBuddy/
 ├── workbuddy.exe          # 主程序
+├── sql-wasm.wasm          # SQLite WASM 运行文件
 ├── start.bat              # 一键启动（可选）
 ├── data/                  # 首次启动自动创建
 └── README.txt

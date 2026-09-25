@@ -1,0 +1,297 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "people-politics",
+      "name": "人民网·时政",
+      "url": "http://www.people.com.cn/rss/politics.xml",
+      "homepage": "http://www.people.com.cn/",
+      "format": "rss",
+      "category": "general",
+      "language": "zh-CN",
+      "region": "CN",
+      "trust": "official"
+    },
+    {
+      "id": "people-finance",
+      "name": "人民网·财经",
+      "url": "http://www.people.com.cn/rss/finance.xml",
+      "homepage": "http://finance.people.com.cn/",
+      "format": "rss",
+      "category": "finance",
+      "language": "zh-CN",
+      "region": "CN",
+      "trust": "official"
+    },
+    {
+      "id": "people-world",
+      "name": "人民网·国际",
+      "url": "http://www.people.com.cn/rss/world.xml",
+      "homepage": "http://world.people.com.cn/",
+      "format": "rss",
+      "category": "world",
+      "language": "zh-CN",
+      "region": "CN",
+      "trust": "official"
+    },
+    {
+      "id": "people-tech",
+      "name": "人民网·科技",
+      "url": "http://www.people.com.cn/rss/it.xml",
+      "homepage": "http://it.people.com.cn/",
+      "format": "rss",
+      "category": "tech",
+      "language": "zh-CN",
+      "region": "CN",
+      "trust": "official"
+    },
+    {
+      "id": "people-culture",
+      "name": "人民网·文化",
+      "url": "http://www.people.com.cn/rss/culture.xml",
+      "homepage": "http://culture.people.com.cn/",
+      "format": "rss",
+      "category": "culture",
+      "language": "zh-CN",
+      "region": "CN",
+      "trust": "official"
+    },
+    {
+      "id": "xinhua-politics",
+      "name": "新华网·时政",
+      "url": "http://www.xinhuanet.com/politics/news_politics.xml",
+      "homepage": "http://www.news.cn/politics/",
+      "format": "rss",
+      "category": "general",
+      "language": "zh-CN",
+      "region": "CN",
+      "trust": "official"
+    },
+    {
+      "id": "xinhua-finance",
+      "name": "新华网·财经",
+      "url": "http://www.xinhuanet.com/fortune/news_fortune.xml",
+      "homepage": "http://www.news.cn/fortune/",
+      "format": "rss",
+      "category": "finance",
+      "language": "zh-CN",
+      "region": "CN",
+      "trust": "official"
+    },
+    {
+      "id": "xinhua-tech",
+      "name": "新华网·科技",
+      "url": "http://www.xinhuanet.com/tech/news_tech.xml",
+      "homepage": "http://www.news.cn/tech/",
+      "format": "rss",
+      "category": "tech",
+      "language": "zh-CN",
+      "region": "CN",
+      "trust": "official"
+    },
+    {
+      "id": "xinhua-world",
+      "name": "新华网·国际",
+      "url": "http://www.xinhuanet.com/world/news_world.xml",
+      "homepage": "http://www.news.cn/world/",
+      "format": "rss",
+      "category": "world",
+      "language": "zh-CN",
+      "region": "CN",
+      "trust": "official"
+    },
+    {
+      "id": "sina-world",
+      "name": "新浪·国际",
+      "url": "https://rss.sina.com.cn/news/world/focus15.xml",
+      "homepage": "https://news.sina.com.cn/world/",
+      "format": "rss",
+      "category": "world",
+      "language": "zh-CN",
+      "region": "CN",
+      "trust": "media"
+    },
+    {
+      "id": "sspai",
+      "name": "少数派",
+      "url": "https://sspai.com/feed",
+      "homepage": "https://sspai.com/",
+      "format": "rss",
+      "category": "digital-life",
+      "language": "zh-CN",
+      "region": "CN",
+      "trust": "media"
+    },
+    {
+      "id": "leiphone",
+      "name": "雷锋网",
+      "url": "https://www.leiphone.com/feed",
+      "homepage": "https://www.leiphone.com/",
+      "format": "rss",
+      "category": "ai",
+      "language": "zh-CN",
+      "region": "CN",
+      "trust": "specialist"
+    },
+    {
+      "id": "tmtpost",
+      "name": "钛媒体",
+      "url": "https://www.tmtpost.com/rss",
+      "homepage": "https://www.tmtpost.com/",
+      "format": "rss",
+      "category": "business-tech",
+      "language": "zh-CN",
+      "region": "CN",
+      "trust": "media"
+    },
+    {
+      "id": "geekpark",
+      "name": "极客公园",
+      "url": "https://www.geekpark.net/rss",
+      "homepage": "https://www.geekpark.net/",
+      "format": "rss",
+      "category": "tech",
+      "language": "zh-CN",
+      "region": "CN",
+      "trust": "media"
+    },
+    {
+      "id": "ithome",
+      "name": "IT之家",
+      "url": "https://www.ithome.com/rss/",
+      "homepage": "https://www.ithome.com/",
+      "format": "rss",
+      "category": "tech",
+      "language": "zh-CN",
+      "region": "CN",
+      "trust": "media"
+    },
+    {
+      "id": "the-verge",
+      "name": "The Verge",
+      "url": "https://www.theverge.com/rss/index.xml",
+      "homepage": "https://www.theverge.com/",
+      "format": "atom",
+      "category": "tech",
+      "language": "en",
+      "region": "US",
+      "trust": "media"
+    },
+    {
+      "id": "ars-technica",
+      "name": "Ars Technica",
+      "url": "https://feeds.arstechnica.com/arstechnica/index",
+      "homepage": "https://arstechnica.com/",
+      "format": "rss",
+      "category": "tech",
+      "language": "en",
+      "region": "US",
+      "trust": "specialist"
+    },
+    {
+      "id": "github-blog",
+      "name": "GitHub Blog",
+      "url": "https://github.blog/feed/",
+      "homepage": "https://github.blog/",
+      "format": "rss",
+      "category": "developer",
+      "language": "en",
+      "region": "US",
+      "trust": "official"
+    },
+    {
+      "id": "openai-news",
+      "name": "OpenAI News",
+      "url": "https://openai.com/news/rss.xml",
+      "homepage": "https://openai.com/news/",
+      "format": "rss",
+      "category": "ai",
+      "language": "en",
+      "region": "US",
+      "trust": "official"
+    },
+    {
+      "id": "arxiv-ai",
+      "name": "arXiv AI",
+      "url": "https://export.arxiv.org/rss/cs.AI",
+      "homepage": "https://arxiv.org/list/cs.AI/recent",
+      "format": "rss",
+      "category": "ai",
+      "language": "en",
+      "region": "US",
+      "trust": "academic"
+    },
+    {
+      "id": "nature",
+      "name": "Nature",
+      "url": "https://www.nature.com/nature.rss",
+      "homepage": "https://www.nature.com/",
+      "format": "rss",
+      "category": "science",
+      "language": "en",
+      "region": "GB",
+      "trust": "academic"
+    },
+    {
+      "id": "science-daily",
+      "name": "ScienceDaily",
+      "url": "https://www.sciencedaily.com/rss/top/science.xml",
+      "homepage": "https://www.sciencedaily.com/",
+      "format": "rss",
+      "category": "science",
+      "language": "en",
+      "region": "US",
+      "trust": "media"
+    }
+  ],
+  "templates": [
+    {
+      "id": "daily-cn",
+      "name": "今日要闻",
+      "description": "国内时政与国际要闻，适合每天早晚快速浏览。",
+      "sourceIds": ["people-politics", "xinhua-politics", "people-world", "xinhua-world", "sina-world"],
+      "limit": 12,
+      "sort": "latest"
+    },
+    {
+      "id": "tech-cn",
+      "name": "中文科技",
+      "description": "科技产品、商业动态与中文 AI 资讯。",
+      "sourceIds": ["leiphone", "tmtpost", "geekpark", "ithome", "sspai"],
+      "limit": 12,
+      "sort": "latest"
+    },
+    {
+      "id": "ai-dev",
+      "name": "AI 与开发",
+      "description": "模型、工程实践、开源生态与开发者工具。",
+      "sourceIds": ["openai-news", "arxiv-ai", "github-blog", "ars-technica", "the-verge"],
+      "limit": 12,
+      "sort": "latest"
+    },
+    {
+      "id": "finance-cn",
+      "name": "财经观察",
+      "description": "宏观、市场与产业财经信息。",
+      "sourceIds": ["people-finance", "xinhua-finance", "tmtpost"],
+      "limit": 10,
+      "sort": "latest"
+    },
+    {
+      "id": "science",
+      "name": "科学前沿",
+      "description": "自然科学与前沿研究进展。",
+      "sourceIds": ["nature", "science-daily", "xinhua-tech"],
+      "limit": 10,
+      "sort": "latest"
+    },
+    {
+      "id": "culture-life",
+      "name": "文化生活",
+      "description": "文化、数字生活与轻量阅读。",
+      "sourceIds": ["people-culture", "sspai"],
+      "limit": 10,
+      "sort": "latest"
+    }
+  ]
+}
