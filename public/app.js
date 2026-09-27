@@ -122,11 +122,6 @@ $$('.tab').forEach((btn) => {
     btn.classList.add('active');
     $('#panel-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab !== 'plan') $('#planViewTabs').classList.add('hidden');
-    if (btn.dataset.tab === 'chat' && window.matchMedia('(min-width: 1200px)').matches) {
-      $$('.panel').forEach((panel) => panel.classList.remove('active'));
-      $('#panel-home').classList.add('active');
-      setTimeout(() => $('#chatInput').focus(), 40);
-    }
     if (btn.dataset.tab === 'home') loadHome();
     if (btn.dataset.tab === 'schedule') loadEvents();
     if (btn.dataset.tab === 'plan') showPlanView(activePlanView);
@@ -1024,6 +1019,9 @@ function openPlanGoalForm(goal = null) {
   $('#planGoalDue').value = goal ? (goal.due_date || '') : '';
   $('#planGoalWeight').value = goal ? goal.weight : 1;
   $('#planGoalProgress').value = goal ? goal.progress : 0;
+  const goalProgress = $('#planGoalProgress');
+  goalProgress.disabled = Boolean(goal && goal.taskCount > 0);
+  goalProgress.title = goalProgress.disabled ? '该目标已有周任务，进度由周任务自动计算' : '';
   $('#planGoalDesc').value = goal ? goal.description || '' : '';
   $('#planGoalDelete').classList.toggle('hidden', !goal);
   $('#planGoalTitle').focus();
@@ -1042,6 +1040,11 @@ function openPlanTaskForm(options = {}) {
   $('#planTaskEstimate').value = task?.estimate_minutes || 120;
   $('#planTaskStatus').value = task?.status || 'open';
   $('#planTaskProgress').value = task?.progress || 0;
+  const derivedTask = Boolean(task && task.total > 0);
+  $('#planTaskStatus').disabled = derivedTask;
+  $('#planTaskProgress').disabled = derivedTask;
+  $('#planTaskStatus').title = derivedTask ? '该任务已有每日待办，状态由待办完成情况自动计算' : '';
+  $('#planTaskProgress').title = derivedTask ? '该任务已有每日待办，进度由待办完成情况自动计算' : '';
   $('#planTaskDesc').value = task?.description || '';
   $('#planTaskDelete').classList.toggle('hidden', !task);
   $('#planTaskTitle').focus();
@@ -1069,9 +1072,9 @@ $('#planGoalForm').addEventListener('submit', async (event) => {
     month: $('#planGoalMonth').value,
     due_date: $('#planGoalDue').value,
     weight: Number($('#planGoalWeight').value) || 1,
-    progress: Number($('#planGoalProgress').value) || 0,
     description: $('#planGoalDesc').value.trim(),
   };
+  if (!$('#planGoalProgress').disabled) body.progress = Number($('#planGoalProgress').value) || 0;
   try {
     if (id) await api('/api/plan/goals/' + id, { method: 'PATCH', body });
     else await api('/api/plan/goals', { method: 'POST', body });
@@ -1099,10 +1102,10 @@ $('#planTaskForm').addEventListener('submit', async (event) => {
     week_start: $('#planTaskWeek').value,
     due_date: $('#planTaskDue').value,
     estimate_minutes: Number($('#planTaskEstimate').value) || 0,
-    status: $('#planTaskStatus').value,
-    progress: Number($('#planTaskProgress').value) || 0,
     description: $('#planTaskDesc').value.trim(),
   };
+  if (!$('#planTaskStatus').disabled) body.status = $('#planTaskStatus').value;
+  if (!$('#planTaskProgress').disabled) body.progress = Number($('#planTaskProgress').value) || 0;
   try {
     if (id) await api('/api/plan/tasks/' + id, { method: 'PATCH', body });
     else await api('/api/plan/tasks', { method: 'POST', body });
@@ -2213,14 +2216,6 @@ function chooseMentionActive() {
 }
 
 function switchTab(name) {
-  if (name === 'chat' && window.matchMedia('(min-width: 1200px)').matches) {
-    $$('.panel').forEach((panel) => panel.classList.remove('active'));
-    $('#panel-home').classList.add('active');
-    $$('.tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.tab === 'chat'));
-    $('#planViewTabs').classList.add('hidden');
-    setTimeout(() => $('#chatInput').focus(), 40);
-    return;
-  }
   if (name === 'plan') return showPlanView(activePlanView);
   if (name === 'todos') return showPlanView('todos');
   const btn = document.querySelector('.tab[data-tab="' + name + '"]');
@@ -4621,7 +4616,7 @@ const PALETTE_ACTIONS = [
   { id: 'goal', label: '目标模式', desc: '切换持续目标状态；内容可点击目标芯片编辑', run: () => { switchTab('chat'); $('#btnGoalMode').click(); } },
   { id: 'plan', label: '计划模式', desc: '切换持续计划状态', run: () => { switchTab('chat'); $('#btnPlanMode').click(); } },
   { id: 'review', label: '审阅变更', desc: '打开 Review 面板并审阅', run: () => { handleSlashCommand('/review'); } },
-  { id: 'plan', label: '计划工作台', desc: '查看月目标、周任务和完成率', run: () => { switchTab('plan'); setTimeout(loadPlan, 50); } },
+  { id: 'plan', label: '计划工作台', desc: '查看月目标、周任务和完成率', run: () => showPlanView('board') },
   { id: 'todos', label: '待办清单', desc: '打开计划中的全部待办视图', run: () => showPlanView('todos') },
   { id: 'news', label: '新闻简报', desc: '打开新闻板块并读取最新内容', run: () => { switchTab('news'); setTimeout(() => loadNews({ force: true }), 50); } },
   { id: 'worktree', label: '工作区 / Worktree', desc: 'Local / Worktree handoff', run: () => { localStorage.setItem(TK_KEY, '1'); renderToolkit(); activateTkMode('workspace'); } },

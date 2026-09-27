@@ -28,11 +28,18 @@ async function main() {
     taskId: task.id,
     plannedFor: plan.dateKey(),
   });
+  const future = new Date();
+  future.setDate(future.getDate() + 7);
+  const futureTodo = plan.createDailyTodo(1, {
+    title: '未来待办不应进入今日',
+    plannedFor: plan.dateKey(future),
+  });
 
   let dashboard = plan.dashboard(1, month);
   assert.strictEqual(dashboard.metrics.goalCount, 1);
   assert.strictEqual(dashboard.metrics.taskCount, 1);
   assert.ok(dashboard.metrics.todayCount >= 1);
+  assert.ok(!dashboard.todayTodos.some((item) => item.id === futureTodo.id));
   assert.strictEqual(dashboard.goals[0].taskCount, 1);
 
   db.update('todos', todo.id, { status: 'done', completed_at: db.nowIso() }, 1);
@@ -68,6 +75,7 @@ async function main() {
   assert.ok(plan.rolloverAll().users >= 0);
 
   assert.strictEqual(plan.removeTask(1, overdueTask.id), true);
+  db.remove('todos', futureTodo.id, 1);
   assert.strictEqual(plan.removeTask(1, task.id), true);
   assert.strictEqual(plan.removeGoal(1, goal.id), true);
 

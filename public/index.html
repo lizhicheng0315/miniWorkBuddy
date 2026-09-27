@@ -7,7 +7,7 @@
     <title>WorkBuddy 助手</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-    <link rel="stylesheet" href="styles.css?v=71" />
+    <link rel="stylesheet" href="styles.css?v=74" />
   </head>
   <body>
     <script>
@@ -498,7 +498,7 @@
       </section>
 
       <!-- 对话（核心界面） -->
-      <section class="panel active" id="panel-chat">
+      <section class="panel" id="panel-chat">
         <div class="history-backdrop hidden" id="historyBackdrop"></div>
         <!-- 右侧会话历史 -->
         <aside class="chat-history" id="chatHistory">
@@ -1091,7 +1091,7 @@
       </section>
     </main>
 
-<script defer src="app.js?v=105"></script>
+<script defer src="app.js?v=107"></script>
     <script>
       // ?nosw=1 临时禁用 Service Worker（用于诊断缓存问题）
       if (!location.search.includes('nosw=1') && 'serviceWorker' in navigator) {

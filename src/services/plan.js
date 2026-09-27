@@ -558,7 +558,7 @@ function dashboard(userId, month) {
   });
   const today = dateKey();
   const todayTodos = context.todos
-    .filter((todo) => (dateOnly(todo.planned_for) || dateOnly(todo.due_at)) === today || todo.status === 'open')
+    .filter((todo) => (dateOnly(todo.planned_for) || dateOnly(todo.due_at)) === today)
     .sort((a, b) => (a.status === 'done' ? 1 : b.status === 'done' ? -1 : 0) || (a.priority || 2) - (b.priority || 2));
   const doneToday = todayTodos.filter((todo) => todo.status === 'done').length;
   const overdueTodos = context.todos.filter((todo) => todo.status === 'open' && todo.due_at && new Date(todo.due_at) < new Date(`${today}T00:00:00`));

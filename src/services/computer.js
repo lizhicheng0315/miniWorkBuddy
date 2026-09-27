@@ -57,10 +57,10 @@ public static class WbWin32 {
             [void][WbWin32]::GetWindowText($hwnd, $sb, $sb.Capacity)
             $rect = New-Object WbWin32+RECT
             [void][WbWin32]::GetWindowRect($hwnd, [ref]$rect)
-            $pid = 0
-            [void][WbWin32]::GetWindowThreadProcessId($hwnd, [ref]$pid)
+            $procId = 0
+            [void][WbWin32]::GetWindowThreadProcessId($hwnd, [ref]$procId)
             $procName = ''
-            try { $procName = (Get-Process -Id $pid -ErrorAction Stop).ProcessName } catch {}
+            try { $procName = (Get-Process -Id $procId -ErrorAction Stop).ProcessName } catch {}
             [void]$list.Add([pscustomobject]@{
               handle = $hwnd.ToInt64()
               title = $sb.ToString()
