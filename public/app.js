@@ -1235,11 +1235,31 @@ function renderNewsForm(board = null) {
   form.classList.remove('hidden');
 }
 
+function newsSourceChip(source) {
+  // 逐源状态：条数 / 最新条目距今 / 本次是缓存还是刚抓取；陈旧或失败会高亮
+  const parts = [`${source.count} 条`];
+  if (source.error) parts.push('不可用');
+  else if (source.ageDays === null) parts.push('无日期');
+  else if (source.ageDays <= 0) parts.push('今天');
+  else parts.push(`${source.ageDays} 天前`);
+  parts.push(source.cached ? '缓存' : '已更新');
+  const cls = source.error ? 'error' : (source.stale ? 'stale' : '');
+  const title = source.error
+    ? `抓取失败：${source.error}`
+    : (source.stale
+      ? `该源最新条目${source.ageDays === null ? '没有日期' : '已 ' + source.ageDays + ' 天'}，刷新不会变新，建议更换信息源`
+      : `最新条目：${source.newestAt ? fmtDateTime(source.newestAt) : '未知'}`);
+  return `<span class="news-src ${cls}" title="${escapeHtml(title)}">${escapeHtml(source.name)} · ${escapeHtml(parts.join(' · '))}</span>`;
+}
+
 function renderNewsFeed(result = null) {
   const box = $('#newsFeed');
   const note = $('#newsBoardNote');
   if (!box) return;
   const board = activeNewsBoard();
+  const sources = result?.sources || [];
+  const staleCount = sources.filter((s) => s.stale).length;
+  const allCached = sources.length > 0 && sources.every((s) => s.cached);
   if (note) {
     if (!board) {
       note.textContent = '';
@@ -1250,6 +1270,8 @@ function renderNewsFeed(result = null) {
         board.cron ? `推送 ${board.cron}` : '仅手动刷新',
       ];
       if (result?.errors?.length) parts.push(`${result.errors.length} 个源暂不可用`);
+      if (staleCount) parts.push(`⚠ ${staleCount} 个源数据陈旧`);
+      if (result) parts.push(allCached ? '本次为缓存数据' : '本次已重新抓取');
       note.textContent = parts.join(' · ');
     }
   }
@@ -1265,8 +1287,11 @@ function renderNewsFeed(result = null) {
     box.innerHTML = '<div class="news-empty"><strong>暂时没有内容</strong><span>可以放宽关键词，或点击刷新重试。</span></div>';
     return;
   }
-  box.innerHTML = newsItems.map((item) => {
-    const meta = [item.sourceName, item.publishedAt ? fmtDateTime(item.publishedAt) : '时间未知'].filter(Boolean).join(' · ');
+  const strip = sources.length
+    ? `<div class="news-src-strip">${sources.map(newsSourceChip).join('')}</div>`
+    : '';
+  box.innerHTML = strip + newsItems.map((item) => {
+    const meta = [item.sourceName, item.publishedAt ? fmtDateTime(item.publishedAt) : '无日期'].filter(Boolean).join(' · ');
     return `
       <article class="news-item">
         <div class="news-item-meta">${escapeHtml(meta)}</div>

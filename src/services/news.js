@@ -25,6 +25,8 @@ const cache = new Map();
 const DEFAULT_SOURCE_ITEMS = 24;
 const DEFAULT_BOARD_LIMIT = 12;
 const DEFAULT_CACHE_TTL_MS = config.news?.cacheTtlMs || 10 * 60 * 1000;
+// 源的最新条目超过这么多天就标记为「陈旧」，界面与简报里都会提示
+const DEFAULT_STALE_DAYS = 7;
 
 function ensureTables() {
   db.rawDb().run(`
@@ -366,6 +368,10 @@ function dateValue(value) {
 
 function parseFeed(xml, source) {
   const text = String(xml || '').replace(/^\uFEFF/, '');
+  // 频道级日期：部分源（如新华网 RSS）条目自身完全没有 pubDate，
+  // 回退用频道头的日期，避免所有条目被判为「无日期」而永远排在最后、等于静默丢失。
+  const head = text.split(/<item\b|<entry\b/i)[0];
+  const feedDate = dateValue(firstTag(head, ['lastBuildDate', 'pubDate', 'updated', 'dc:date', 'date']));
   const blocks = [
     ...text.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item>/gi),
     ...text.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/gi),
@@ -380,15 +386,17 @@ function parseFeed(xml, source) {
     const summary = firstTag(block, [
       'description', 'summary', 'content:encoded', 'content', 'media:description',
     ]);
-    const publishedAt = dateValue(firstTag(block, [
+    const ownDate = dateValue(firstTag(block, [
       'pubDate', 'published', 'updated', 'dc:date', 'date',
     ]));
+    const publishedAt = ownDate || feedDate;
     return {
       id: `${source.id}:${firstTag(block, ['guid', 'id']) || link || index}`,
       title,
       url: link,
       summary,
       publishedAt,
+      dateFrom: ownDate ? 'item' : (feedDate ? 'feed' : 'none'),
       sourceId: source.id,
       sourceName: source.name,
       category: source.category,
@@ -544,18 +552,37 @@ async function articlesFor(userId, input = {}) {
   }
   items = dedupeArticles(items);
   const limit = normalizeLimit(input.limit || board?.limit_count, 20);
-  return {
-    board,
-    items: sortArticles(items, board?.sort_mode || input.sort || 'latest').slice(0, limit),
-    sources: results.map((result) => ({
+  // 逐源新鲜度：源停更时界面必须能看出来，否则「刷新后还是旧闻」会被误判成刷新坏了
+  const staleDays = Number(config.news?.staleDays) || DEFAULT_STALE_DAYS;
+  const sourceSummary = results.map((result) => {
+    const list = result.items || [];
+    const times = list
+      .map((item) => (item.publishedAt ? Date.parse(item.publishedAt) : NaN))
+      .filter((value) => Number.isFinite(value));
+    const newest = times.length ? Math.max(...times) : null;
+    const undated = list.filter((item) => !item.publishedAt).length;
+    const ageDays = newest === null ? null : Math.floor((Date.now() - newest) / 86_400_000);
+    return {
       id: result.source.id,
       name: result.source.name,
-      count: result.items.length,
+      count: list.length,
       cached: !!result.cached,
       fetchedAt: result.fetchedAt,
       error: result.error || null,
-    })),
+      undated,
+      newestAt: newest === null ? null : new Date(newest).toISOString(),
+      ageDays,
+      // 抓取失败 / 全源无日期 / 最新条目超过阈值 -> 陈旧
+      stale: !result.error && list.length > 0 && (newest === null || ageDays > staleDays),
+    };
+  });
+  return {
+    board,
+    items: sortArticles(items, board?.sort_mode || input.sort || 'latest').slice(0, limit),
+    sources: sourceSummary,
     errors,
+    stale: sourceSummary.filter((source) => source.stale),
+    staleDays,
   };
 }
 
@@ -585,7 +612,7 @@ function renderDigest(board, result) {
     lines.push('暂时没有获取到符合条件的新闻。');
   } else {
     result.items.forEach((item, index) => {
-      const meta = [item.sourceName, relativeTime(item.publishedAt)].filter(Boolean).join(' · ');
+      const meta = [item.sourceName, relativeTime(item.publishedAt) || '无日期'].filter(Boolean).join(' · ');
       lines.push(`${index + 1}. [${mdText(item.title)}](${item.url})`);
       lines.push(`   ${meta}`);
       if (item.summary) lines.push(`   ${mdText(item.summary).slice(0, 220)}`);
@@ -594,6 +621,16 @@ function renderDigest(board, result) {
   }
   if (result.errors.length) {
     lines.push(`> ${result.errors.length} 个信息源暂时不可用：${result.errors.map((item) => item.sourceName).join('、')}`);
+  }
+  // 源停更必须显式提示，否则「刷新后还是旧闻」会被误认为刷新失效
+  const stale = result.stale || [];
+  if (stale.length) {
+    const threshold = result.staleDays || DEFAULT_STALE_DAYS;
+    const detail = stale
+      .map((source) => `${source.name}（${source.ageDays === null ? '条目无日期' : source.ageDays + ' 天前'}）`)
+      .join('、');
+    lines.push(`> ⚠ ${stale.length} 个信息源已超过 ${threshold} 天未更新：${detail}`);
+    lines.push('> 这些源提供的是历史内容，刷新不会变新；建议在板块设置里更换信息源。');
   }
   return lines.join('\n').trim();
 }

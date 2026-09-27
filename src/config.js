@@ -74,6 +74,8 @@ const config = {
     cacheTtlMs: envInt('NEWS_CACHE_TTL_MS', 10 * 60_000),
     concurrency: envInt('NEWS_CONCURRENCY', 4),
     userAgent: envStr('NEWS_USER_AGENT', 'WorkBuddy/0.1 (+local news reader)'),
+    // 源的最新条目超过这么多天就判为「陈旧」，界面与简报都会提示
+    staleDays: envInt('NEWS_STALE_DAYS', 7),
   },
   tls: {
     enabled: envBool('TLS_ENABLED', false),
